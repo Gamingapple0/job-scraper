@@ -1,0 +1,46 @@
+{
+  "totalCount": 3,
+  "data": [
+    {
+      "id": "84512377",
+      "title": "Software Engineer (Java / Spring Boot)",
+      "teaser": "Work on a modern microservices platform in a small product team.",
+      "advertiser": { "id": "20155432", "description": "Acme Software Pty Ltd" },
+      "location": "Melbourne",
+      "area": "CBD & Inner Suburbs",
+      "salary": "$110,000 – $130,000 + super",
+      "listingDate": "2026-09-03T22:14:00Z",
+      "workTypes": ["Full time"],
+      "bulletPoints": ["Hybrid, 2 days in office", "Java 21, Spring Boot, AWS"],
+      "classification": { "id": "6281", "description": "Information & Communication Technology" },
+      "subClassification": { "id": "6287", "description": "Developers/Programmers" },
+      "workArrangements": { "data": [{ "label": { "text": "Hybrid" } }] }
+    },
+    {
+      "id": "84512400",
+      "title": "Junior Frontend Developer",
+      "teaser": "React and TypeScript, mentored by senior engineers.",
+      "advertiser": { "id": "20099111", "description": "Northside Digital" },
+      "location": "Melbourne",
+      "area": "Eastern Suburbs",
+      "listingDate": "2026-09-04T01:02:00Z",
+      "workTypes": ["Full time"],
+      "bulletPoints": ["Graduates encouraged to apply"],
+      "classification": { "id": "6281", "description": "Information & Communication Technology" },
+      "subClassification": { "id": "6287", "description": "Developers/Programmers" }
+    },
+    {
+      "id": "84512999",
+      "title": "Contract Test Analyst",
+      "teaser": "6 month contract, automation focus with Playwright.",
+      "advertiser": { "id": "20077001", "description": "Statewide Consulting Group" },
+      "location": "Melbourne",
+      "area": "CBD & Inner Suburbs",
+      "salary": "$750 - $850 per day",
+      "listingDate": "2026-08-30T04:40:00Z",
+      "workTypes": ["Contract/Temp"],
+      "classification": { "id": "6281", "description": "Information & Communication Technology" },
+      "subClassification": { "id": "6304", "description": "Testing & Quality Assurance" }
+    }
+  ]
+}

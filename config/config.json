@@ -1,0 +1,274 @@
+{
+  "dataDir": "./data",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "cache": {
+    "enabled": true,
+    "ttlMinutes": 360
+  },
+  "defaults": {
+    "maxPages": 5,
+    "maxAgeDays": 30,
+    "fetchDetail": true,
+    "closeAfterMissedRuns": 3,
+    "fuzzyDedupe": true,
+    "sanityFloorRatio": 0.2
+  },
+  "sources": {
+    "seek": {
+      "enabled": true,
+      "minDelayMs": 1800,
+      "jitterMs": 1600,
+      "maxRequestsPerRun": 100,
+      "searchEndpoint": "https://www.seek.com.au/api/jobsearch/v5/search",
+      "jobDetailUrl": "https://au.seek.com/job/{id}",
+      "siteKey": "AU-Main",
+      "sourcesystem": "houston",
+      "locale": "en-AU",
+      "pageSize": 22,
+      "sortMode": "ListedDate",
+      "extraParams": {}
+    },
+    "linkedin": {
+      "enabled": true,
+      "minDelayMs": 3000,
+      "jitterMs": 2000,
+      "maxRequestsPerRun": 100,
+      "searchEndpoint": "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search",
+      "detailEndpoint": "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{id}",
+      "publicJobUrl": "https://www.linkedin.com/jobs/view/{id}",
+      "pageSize": 25,
+      "timePosted": "r86400",
+      "maxStart": 1000,
+      "extraParams": {}
+    }
+  },
+  "searches": [
+    {
+      "label": "java-backend",
+      "query": "java spring boot",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 5,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "react-frontend",
+      "query": "react typescript",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 5,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "junior-swe",
+      "query": "junior software engineer",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "sdet-hybrid",
+      "query": "SDET OR \"software engineer in test\" OR \"automation engineer\" java",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "fullstack-combined",
+      "query": "full stack developer java spring react",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 4,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "graduate-programs",
+      "query": "graduate software engineer program",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 30,
+      "enabled": true
+    },
+    {
+      "label": "nz-software-engineer",
+      "query": "software engineer",
+      "location": "New Zealand",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "ireland-software-developer",
+      "query": "software developer OR full stack developer",
+      "location": "Ireland",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "uk-software-engineer-sponsorship",
+      "query": "software engineer visa sponsorship",
+      "location": "United Kingdom",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "germany-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Germany",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "netherlands-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Netherlands",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "canada-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Canada",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "singapore-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Singapore",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "uae-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "United Arab Emirates",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "sydney-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "All Sydney NSW",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 4,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "brisbane-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "All Brisbane QLD",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "perth-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "All Perth WA",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "au-wide-remote",
+      "query": "full stack developer java spring react remote",
+      "location": "Australia",
+      "sources": [
+        "seek",
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    }
+  ],
+  "pipeline": {
+    "fitInboxPath": "./data/stage/fit-filter-inbox.json",
+    "trackerInboxPath": "./data/stage/tracker-inbox.json",
+    "fitInboxMaxAgeDays": 14,
+    "sheets": {
+      "spreadsheetId": "",
+      "sheetName": "Tracker",
+      "oauthClientPath": "./config/google-oauth-client.json",
+      "oauthTokenPath": "./config/google-oauth-token.json"
+    },
+    "profileInboxPath": "./data/stage/profile-inbox.json",
+    "coverLetterInboxPath": "./data/stage/cover-letter-inbox.json",
+    "sheetsIntl": {
+      "spreadsheetId": "",
+      "sheetName": "Tracker",
+      "oauthClientPath": "./config/google-oauth-client.json",
+      "oauthTokenPath": "./config/google-oauth-token.json"
+    }
+  }
+}

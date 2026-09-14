@@ -1,0 +1,6 @@
+{
+  "pipeline": {
+    "sheets": { "spreadsheetId": "your-au-tracker-spreadsheet-id" },
+    "sheetsIntl": { "spreadsheetId": "your-intl-tracker-spreadsheet-id" }
+  }
+}

@@ -1,0 +1,18 @@
+node_modules/
+dist/
+data/
+!data/.gitkeep
+*.log
+.env
+.DS_Store
+
+# Google Sheets OAuth secrets (never commit)
+config/google-oauth-client.json
+config/google-oauth-token.json
+
+# Personal application material — not for a public repo
+Claude outputs/
+_to_delete/
+
+# Real config values (spreadsheet IDs, etc.) — see config.local.json.example
+config/config.local.json
