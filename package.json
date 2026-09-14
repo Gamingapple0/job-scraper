@@ -1,0 +1,40 @@
+{
+  "name": "job-scraper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local multi-source job scraper. Seek implemented; other sources plug in behind one interface.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "run:all": "tsx src/cli.ts run --all",
+    "discover": "tsx src/cli.ts discover",
+    "stats": "tsx src/cli.ts stats",
+    "export-fit-inbox": "tsx src/cli.ts export-fit-inbox",
+    "export-tracker-inbox": "tsx src/cli.ts export-tracker-inbox",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "inspect": "node --inspect-brk ./node_modules/tsx/dist/cli.mjs src/cli.ts",
+    "google-auth": "tsx src/cli.ts google-auth",
+    "sync-sheet": "tsx src/cli.ts sync-sheet",
+    "new-tracker-tab": "tsx src/cli.ts new-tracker-tab",
+    "sync-sheet-intl": "tsx src/cli.ts sync-sheet --intl",
+    "new-tracker-tab-intl": "tsx src/cli.ts new-tracker-tab --intl"
+  },
+  "dependencies": {
+    "@googleapis/sheets": "^9.5.0",
+    "commander": "^12.1.0",
+    "google-auth-library": "^9.15.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^5.0.0"
+  }
+}

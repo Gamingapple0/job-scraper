@@ -1,0 +1,68 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug: run --all --dry-run",
+      "program": "${workspaceFolder}/node_modules/tsx/dist/cli.mjs",
+      "args": ["src/cli.ts", "run", "--all", "--dry-run", "--log-level", "debug"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "sourceMaps": true
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug: run --all (writes to jobs.json)",
+      "program": "${workspaceFolder}/node_modules/tsx/dist/cli.mjs",
+      "args": ["src/cli.ts", "run", "--all", "--log-level", "debug"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "sourceMaps": true
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug: replay a saved RawJob (no network)",
+      "program": "${workspaceFolder}/node_modules/tsx/dist/cli.mjs",
+      "args": ["src/cli.ts", "replay", "data/.cache/sample-raw-job.json", "--log-level", "debug"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "sourceMaps": true
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug: apply-fit-verdicts",
+      "program": "${workspaceFolder}/node_modules/tsx/dist/cli.mjs",
+      "args": ["src/cli.ts", "apply-fit-verdicts", "data/stage/fit-verdicts.json", "--log-level", "debug"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "sourceMaps": true
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug: current Vitest file",
+      "program": "${workspaceFolder}/node_modules/vitest/vitest.mjs",
+      "args": ["run", "${relativeFile}"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "sourceMaps": true
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "Attach to running process (port 9229)",
+      "port": 9229,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "restart": true
+    }
+  ]
+}
