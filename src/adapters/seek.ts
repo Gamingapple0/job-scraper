@@ -265,6 +265,14 @@ export function createSeekAdapter(ctx: AdapterContext): SourceAdapter {
         if (desc) out.description = desc;
       }
 
+      // Whether applying stays on Seek ("Quick apply") or redirects off-site
+      // ("Apply" -> employer's own site). Read from the same detail page
+      // already fetched above for the description, so this costs nothing
+      // extra — and it means the apply skill never has to open the listing
+      // in a browser just to find out.
+      const applyMethod = extractApplyMethod(html);
+      if (applyMethod) out.applyMethod = applyMethod;
+
       if (!out.description) {
         detailMisses++;
         if (detailMisses <= 3) {
@@ -289,6 +297,25 @@ export function createSeekAdapter(ctx: AdapterContext): SourceAdapter {
       return ctx.http.getJson(url, { headers: headers(query), noCache: true });
     },
   };
+}
+
+/**
+ * Seek's server-rendered detail page embeds its GraphQL page state as JSON
+ * in a script tag, which carries `"isLinkOut":true|false` on the job
+ * object: true when applying redirects off Seek to the employer's own
+ * site, false when it stays on Seek as their own "Quick apply" flow.
+ * Confirmed against three live listings on 2026-09-20 — two `isLinkOut:
+ * true` jobs that redirected to the employer's site in a real browser, one
+ * `isLinkOut: false` job whose apply button was labelled "Quick apply".
+ * A plain regex rather than a JSON.parse of the whole blob, same reasoning
+ * as the other extractors here: the surrounding state is enormous and not
+ * meant to be walked whole, and this one field is stable even if the rest
+ * of the shape around it isn't.
+ */
+export function extractApplyMethod(html: string): 'quick_apply' | 'external' | undefined {
+  const m = /"isLinkOut"\s*:\s*(true|false)/.exec(html);
+  if (!m) return undefined;
+  return m[1] === 'true' ? 'external' : 'quick_apply';
 }
 
 /** Pull the JobPosting object out of the page's JSON-LD blocks. */

@@ -1,8 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { Job, PipelineStatus, RunStats, UpsertResult } from './types.js';
+import type { ApplyMethod, Job, PipelineStatus, RunStats, UpsertResult } from './types.js';
 import { isProbablySameJob, mergeJob } from './dedupe.js';
 import { advanceStatus, type TransitionResult } from './pipeline-status.js';
+import type { ResumeVersion } from './resume-version.js';
 
 /**
  * Storage contract. JsonStore is the implementation; swapping to SQLite later
@@ -35,13 +36,28 @@ export interface Store {
    */
   setProfile(
     id: string,
-    patch: { careerProfile: string; technicalSkills: string[] } | { profileNote: string },
+    patch: { careerProfile: string; version: ResumeVersion } | { profileNote: string },
   ): { ok: true } | { ok: false; reason: 'unknown id' };
   /** Same shape and rules as setProfile, for the cover-letter side-fields. */
   setCoverLetter(
     id: string,
-    patch: { coverLetter: string } | { coverLetterNote: string },
+    patch: { coverLetter: string; version: ResumeVersion } | { coverLetterNote: string },
   ): { ok: true } | { ok: false; reason: 'unknown id' };
+  /** Records what the Sheet's Career Profile / Cover Letter cell last held for this job. See Job.sheetCareerProfile. */
+  setSheetSnapshot(
+    id: string,
+    snapshot: { careerProfile?: string; coverLetter?: string },
+  ): { ok: true } | { ok: false; reason: 'unknown id' };
+  /** Sets (or with undefined clears) the apply skills' free-text note. */
+  setApplyNote(id: string, note: string | undefined): { ok: true } | { ok: false; reason: 'unknown id' };
+  /**
+   * Records how a job is applied to (see ApplyMethod), so a later run never
+   * has to re-open the listing in a browser just to find that out again.
+   * Only meaningful for a job the scraper couldn't tag itself (LinkedIn) —
+   * the apply skill calls this live, the first time it actually sees the
+   * listing's apply button.
+   */
+  setApplyMethod(id: string, method: ApplyMethod): { ok: true } | { ok: false; reason: 'unknown id' };
   /** Sets Anshu's manual interviewStage tracking field. No ratchet, no allowed-transition graph. */
   setInterviewStage(id: string, stage: string): { ok: true } | { ok: false; reason: 'unknown id' };
   save(): Promise<void>;
@@ -53,6 +69,10 @@ export interface RunHistoryEntry {
   finishedAt: string;
   source: string;
   query: string;
+  // ponytail: same query text across different locations is a real market
+  // (see config.json), so the sanity check in pipeline.ts must key its
+  // rolling average on query+location, not query alone.
+  location: string;
   fetched: number;
   created: number;
 }
@@ -156,13 +176,20 @@ export class JsonStore implements Store {
 
   setProfile(
     id: string,
-    patch: { careerProfile: string; technicalSkills: string[] } | { profileNote: string },
+    patch: { careerProfile: string; version: ResumeVersion } | { profileNote: string },
   ): { ok: true } | { ok: false; reason: 'unknown id' } {
     const job = this.jobs.get(id);
     if (!job) return { ok: false, reason: 'unknown id' };
     if ('careerProfile' in patch) {
+      // Replacing an existing profile before we ever recorded what the Sheet
+      // holds: the Sheet still has the old text as of the last sync, so
+      // remember it. That is what lets reconcile push the new text instead
+      // of mistaking the stale cell for a hand edit and pulling it back.
+      if (job.careerProfile && job.sheetCareerProfile === undefined && job.careerProfile !== patch.careerProfile) {
+        job.sheetCareerProfile = job.careerProfile;
+      }
       job.careerProfile = patch.careerProfile;
-      job.technicalSkills = patch.technicalSkills;
+      job.careerProfileVersion = patch.version;
       job.profileNote = undefined;
     } else {
       job.profileNote = patch.profileNote;
@@ -172,16 +199,45 @@ export class JsonStore implements Store {
 
   setCoverLetter(
     id: string,
-    patch: { coverLetter: string } | { coverLetterNote: string },
+    patch: { coverLetter: string; version: ResumeVersion } | { coverLetterNote: string },
   ): { ok: true } | { ok: false; reason: 'unknown id' } {
     const job = this.jobs.get(id);
     if (!job) return { ok: false, reason: 'unknown id' };
     if ('coverLetter' in patch) {
+      if (job.coverLetter && job.sheetCoverLetter === undefined && job.coverLetter !== patch.coverLetter) {
+        job.sheetCoverLetter = job.coverLetter;
+      }
       job.coverLetter = patch.coverLetter;
+      job.coverLetterVersion = patch.version;
       job.coverLetterNote = undefined;
     } else {
       job.coverLetterNote = patch.coverLetterNote;
     }
+    return { ok: true };
+  }
+
+  setSheetSnapshot(
+    id: string,
+    snapshot: { careerProfile?: string; coverLetter?: string },
+  ): { ok: true } | { ok: false; reason: 'unknown id' } {
+    const job = this.jobs.get(id);
+    if (!job) return { ok: false, reason: 'unknown id' };
+    if (snapshot.careerProfile !== undefined) job.sheetCareerProfile = snapshot.careerProfile;
+    if (snapshot.coverLetter !== undefined) job.sheetCoverLetter = snapshot.coverLetter;
+    return { ok: true };
+  }
+
+  setApplyNote(id: string, note: string | undefined): { ok: true } | { ok: false; reason: 'unknown id' } {
+    const job = this.jobs.get(id);
+    if (!job) return { ok: false, reason: 'unknown id' };
+    job.applyNote = note;
+    return { ok: true };
+  }
+
+  setApplyMethod(id: string, method: ApplyMethod): { ok: true } | { ok: false; reason: 'unknown id' } {
+    const job = this.jobs.get(id);
+    if (!job) return { ok: false, reason: 'unknown id' };
+    job.applyMethod = method;
     return { ok: true };
   }
 
@@ -232,6 +288,7 @@ export class JsonStore implements Store {
         finishedAt: s.finishedAt,
         source: s.source,
         query: s.query,
+        location: s.location,
         fetched: s.fetched,
         created: s.created,
       });

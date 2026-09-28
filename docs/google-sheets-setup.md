@@ -61,28 +61,32 @@ npm run sync-sheet
 
 ## Columns written
 
+Written in this order (`sheetHeaders()` in `src/core/google-sheets.ts`):
+
 | Column | Source |
 | --- | --- |
 | Job ID | `CleanJob.id` (stable, matches `data/jobs.json`) |
 | Title | `CleanJob.title` |
 | Company | `CleanJob.company` |
 | Location | `CleanJob.location` |
-| Posted | `CleanJob.postedAt` |
-| Salary | `CleanJob.salary` |
-| Tags | `CleanJob.tags`, comma-joined |
-| Fit Reason | `CleanJob.fitReason` (from the Stage 2 fit-filter agent) |
+| Country | `CleanJob.country` — international tracker only (`pipeline.sheetsIntl.includeCountry`); every AU job is AU, so the AU tracker doesn't carry this column |
 | URL | `CleanJob.url` |
-| Date Added | today's date, when the row was written |
-| Applied | left blank — fill in by hand (or wire up later via `sync-applied`) |
+| Applied/Closed | left blank — Anshu's own checkbox, filled in by hand |
 | Career Profile | `Job.careerProfile` — see "Stage 3b: career profile" below |
-| Technical Skills | `Job.technicalSkills`, comma-joined |
+| Cover Letter | `Job.coverLetter` |
+| Fit Reason | `CleanJob.fitReason` (from the Stage 2 fit-filter agent) |
+| Date Added | today's date, when the row was written |
+| Date Posted | `CleanJob.postedAt` |
+| Tags | `CleanJob.tags`, comma-joined |
+| Salary | `CleanJob.salary` |
 | Notes | flag for a job the career-profile step couldn't finish — a disqualifying requirement it spotted, or an unanswered clarifying question |
+| Stages | Anshu's own dropdown, filled in by hand |
 
-Want different columns, a different tab name, or a different spreadsheet? Edit `pipeline.sheets` in `config/config.local.json` (`spreadsheetId`) or `config/config.json` (`sheetName`) or the `SHEET_HEADERS` / `jobToRow` in `src/core/google-sheets.ts`.
+Want different columns, a different tab name, or a different spreadsheet? Edit `pipeline.sheets` / `pipeline.sheetsIntl` in `config/config.local.json` (`spreadsheetId`) or `config/config.json` (`sheetName`, `includeCountry`) or `sheetHeaders()` / `jobToRow()` in `src/core/google-sheets.ts`.
 
 ## Stage 3b: career profile (no LLM in the plumbing, LLM only for the writing itself)
 
-Once a job is `tracked`, a separate stage tailors a `career_profile` paragraph and a `technical_skills` list for it, using the exact prompt in `Claude outputs/career-profile-tailoring-prompt.md`. The LLM's only job is: read the base resume + this job's JD + the company name, and produce those two fields — everything else here is plain deterministic code, same philosophy as the fit-filter stage.
+Once a job is `tracked`, a separate stage tailors a `career_profile` paragraph for it, using the exact prompt in `Claude outputs/career-profile-tailoring-prompt.md`. The LLM's only job is: read the base resume + this job's JD + the company name, and produce that one field — everything else here is plain deterministic code, same philosophy as the fit-filter stage.
 
 ```
 npm run build
@@ -108,7 +112,7 @@ Not wired in yet by default. Once you're happy with a manual run, add these two 
 
 ```
 npm run export-tracker-inbox
-npm run sync-sheet
+npm run sync-sheet                          # syncs both the AU and international sheets
 ```
 
 Both are plain deterministic commands with exit codes — no LLM step, no extra token cost, consistent with how the rest of that task is built.

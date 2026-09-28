@@ -114,7 +114,7 @@ export async function runSearch(
   }
 
   const finishedAt = new Date().toISOString();
-  const expected = expectedFetchCount(ctx.history, adapter.name, query.query);
+  const expected = expectedFetchCount(ctx.history, adapter.name, query.query, query.location);
   let ok = !blocked && errors === 0;
   let note: string | undefined;
 
@@ -149,12 +149,19 @@ export async function runSearch(
 }
 
 /** Mean fetched count of the last 3 runs of this source+query, if we have them. */
-function expectedFetchCount(
+export function expectedFetchCount(
   history: RunHistoryEntry[],
   source: string,
   query: string,
+  location: string,
 ): number | undefined {
-  const rows = history.filter((h) => h.source === source && h.query === query).slice(-3);
+  // Different locations sharing the same query text (e.g. every AU-regional
+  // Seek search reuses "full stack developer java spring react") are
+  // different job markets with different real volumes — must not be pooled
+  // into one rolling average or the smaller market gets flagged as broken.
+  const rows = history
+    .filter((h) => h.source === source && h.query === query && h.location === location)
+    .slice(-3);
   if (rows.length < 3) return undefined;
   const total = rows.reduce((a, r) => a + r.fetched, 0);
   return total / rows.length;

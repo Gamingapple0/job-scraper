@@ -99,6 +99,12 @@ export function mergeJob(existing: Job, incoming: Job): Job {
     employmentType:
       existing.employmentType !== 'unknown' ? existing.employmentType : incoming.employmentType,
     location: existing.location.city ? existing.location : incoming.location,
+    // Prefer the freshest value (keeps Seek's isLinkOut current if it ever
+    // changes); falls back to whatever's already stored, which is what
+    // preserves a LinkedIn job's applyMethod once the apply skill has set
+    // it via set-apply-method, since the scraper itself never determines
+    // LinkedIn's value and so never has an incoming one to overwrite with.
+    applyMethod: incoming.applyMethod ?? existing.applyMethod,
     tags: unique([...existing.tags, ...incoming.tags]),
     seenOn: unique([...existing.seenOn, ...incoming.seenOn]),
     matchedQueries: unique([...existing.matchedQueries, ...incoming.matchedQueries]),

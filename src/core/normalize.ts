@@ -393,6 +393,7 @@ export function toJob(rawJob: RawJob, source: SourceName, query: string, now = n
   if (rawJob.category) job.category = rawJob.category;
   if (rawJob.teaser) job.teaser = collapse(rawJob.teaser);
   if (description) job.description = description;
+  if (rawJob.applyMethod) job.applyMethod = rawJob.applyMethod;
 
   return job;
 }

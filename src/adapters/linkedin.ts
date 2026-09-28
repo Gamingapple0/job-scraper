@@ -182,6 +182,11 @@ export function createLinkedInAdapter(ctx: AdapterContext): SourceAdapter {
         if (desc) out.description = desc;
       }
 
+      // Easy Apply vs company site, read from the same guest page (no login,
+      // no extra request). See extractLinkedInApplyMethod.
+      const applyMethod = extractLinkedInApplyMethod(html);
+      if (applyMethod) out.applyMethod = applyMethod;
+
       const criteria = extractJobCriteria(html);
       const employmentType = criteria['employment type'];
       if (employmentType) out.employmentTypeRaw = employmentType;
@@ -310,4 +315,16 @@ export function extractJobCriteria(html: string): Record<string, string> {
     if (label && value) out[label] = value;
   }
   return out;
+}
+
+/**
+ * The guest jobPosting page's apply button says where applying happens via
+ * its tracking name: `public_jobs_apply-link-onsite` (or `-simple`) stays on
+ * LinkedIn (Easy Apply), `public_jobs_apply-link-offsite` goes to the
+ * employer's site. No button (closed listing) leaves it unknown.
+ */
+export function extractLinkedInApplyMethod(html: string): 'easy_apply' | 'external' | undefined {
+  const m = /public_jobs_apply-link-(onsite|simple|offsite)/.exec(html);
+  if (!m) return undefined;
+  return m[1] === 'offsite' ? 'external' : 'easy_apply';
 }

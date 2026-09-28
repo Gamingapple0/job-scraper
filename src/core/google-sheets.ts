@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { OAuth2Client, type Credentials } from 'google-auth-library';
 import { sheets, type sheets_v4 } from '@googleapis/sheets';
 import type { CleanJob } from './stage-export.js';
-import type { Job } from './types.js';
+import type { ApplyMethod, Job } from './types.js';
 
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
 
@@ -21,45 +21,116 @@ const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
  */
 const DEFAULT_LOOPBACK_PORT = 53682;
 
-/** The header row written to a fresh tab. Order here is the column order. */
-export const SHEET_HEADERS = [
-  'Job ID',
-  'Title',
-  'Company',
-  'Location',
-  'Posted',
-  'Salary',
-  'Tags',
-  'Fit Reason',
-  'URL',
-  'Date Added',
-  'Applied',
-  'Career Profile',
-  'Technical Skills',
-  'Cover Letter',
-  'Notes',
-  'Stages',
-] as const;
+/**
+ * The header row written to a fresh tab, and read back by every function
+ * below to find columns by name (never by a hardcoded index) — so this one
+ * array is the single source of truth for both the column order and which
+ * columns exist. `includeCountry` (SheetsConfig) adds a Country column
+ * right after Location: only the international tracker sets it, since only
+ * LinkedIn results span more than one country (see SheetsConfig.includeCountry).
+ */
+export function sheetHeaders(cfg: SheetsConfig): string[] {
+  return [
+    'Job ID',
+    'Title',
+    'Company',
+    'Location',
+    ...(cfg.includeCountry ? ['Country'] : []),
+    'URL',
+    'Applied/Closed',
+    'Career Profile',
+    'Cover Letter',
+    'Fit Reason',
+    'Date Added',
+    'Date Posted',
+    'Tags',
+    'Salary',
+    'Notes',
+    'Stages',
+    'Apply Method',
+  ];
+}
 
 /** Anshu's own outcome-tracking dropdown for the Stages column. */
+/**
+ * Tracker label for each ApplyMethod. Blank means not known yet: SEEK jobs
+ * get it at scrape time, LinkedIn jobs only once the apply skill has opened
+ * the listing and run set-apply-method.
+ */
+export const APPLY_METHOD_LABELS: Record<ApplyMethod, string> = {
+  easy_apply: 'Easy Apply',
+  quick_apply: 'Quick Apply',
+  external: 'External',
+};
+
+export function applyMethodLabel(method: ApplyMethod | undefined): string {
+  return method ? APPLY_METHOD_LABELS[method] : '';
+}
+
 export const STAGE_OPTIONS = ['Take home', 'Initial Screen', 'Final Round', 'Offer', 'NA', 'Invalid'] as const;
 
-/** 0-indexed column offsets into a full A:P row, named for readability below. */
-const COL = {
-  jobId: 0,
-  applied: 10,
-  careerProfile: 11,
-  technicalSkills: 12,
-  coverLetter: 13,
-  notes: 14,
-  stages: 15,
-} as const;
+/**
+ * Column offsets, looked up by header name rather than hardcoded — so
+ * reordering `sheetHeaders` above is the only place a layout change ever
+ * has to happen. `country` is -1 on a layout without one (the AU tracker);
+ * every caller that reads it already only does so when `includeCountry`.
+ */
+interface ColIndex {
+  jobId: number;
+  location: number;
+  country: number;
+  url: number;
+  applied: number;
+  careerProfile: number;
+  coverLetter: number;
+  fitReason: number;
+  dateAdded: number;
+  datePosted: number;
+  tags: number;
+  salary: number;
+  notes: number;
+  stages: number;
+  applyMethod: number;
+}
+
+export function colIndex(headers: string[]): ColIndex {
+  const at = (name: string) => headers.indexOf(name);
+  return {
+    jobId: at('Job ID'),
+    location: at('Location'),
+    country: at('Country'),
+    url: at('URL'),
+    applied: at('Applied/Closed'),
+    careerProfile: at('Career Profile'),
+    coverLetter: at('Cover Letter'),
+    fitReason: at('Fit Reason'),
+    dateAdded: at('Date Added'),
+    datePosted: at('Date Posted'),
+    tags: at('Tags'),
+    salary: at('Salary'),
+    notes: at('Notes'),
+    stages: at('Stages'),
+    applyMethod: at('Apply Method'),
+  };
+}
+
+/** 0-indexed column number -> A1 letter (0 -> 'A', 11 -> 'L', ...). Only needs single-letter range in this sheet's size. */
+function columnLetter(index: number): string {
+  return String.fromCharCode('A'.charCodeAt(0) + index);
+}
+
+/** Last column letter for the full-width A1 ranges below, derived from how many columns this layout has. */
+function lastColumnLetter(headers: string[]): string {
+  return columnLetter(headers.length - 1);
+}
 
 export interface SheetsConfig {
   spreadsheetId: string;
   sheetName: string;
   oauthClientPath: string;
   oauthTokenPath: string;
+  /** Adds a Country column after Location — set for the international tracker only. */
+  includeCountry?: boolean;
 }
 
 interface OAuthClientFile {
@@ -209,14 +280,15 @@ function tabRange(sheetName: string, suffix: string): string {
 
 /**
  * Confirms the target tab exists in the spreadsheet — creating it if not —
- * and that its header row has at least SHEET_HEADERS.length columns,
+ * and that its header row has at least this config's header count,
  * extending it in place (non-destructively) if it's short. Every function
  * below that touches the sheet calls this first: it's cheap (one metadata
  * read) and it means a tab renamed or trimmed by hand doesn't produce a
  * cryptic "Unable to parse range" from deep inside a values.get call —
  * it's caught here with the actual list of tabs that DO exist.
  */
-async function ensureSheetAndHeader(client: sheets_v4.Sheets, cfg: SheetsConfig): Promise<void> {
+async function ensureSheetAndHeader(client: sheets_v4.Sheets, cfg: SheetsConfig): Promise<string[]> {
+  const headers = sheetHeaders(cfg);
   const meta = await client.spreadsheets.get({ spreadsheetId: cfg.spreadsheetId });
   const titles = (meta.data.sheets ?? []).map((s) => s.properties?.title ?? '(untitled)');
   const existingTab = meta.data.sheets?.find((s) => s.properties?.title === cfg.sheetName);
@@ -240,71 +312,37 @@ async function ensureSheetAndHeader(client: sheets_v4.Sheets, cfg: SheetsConfig)
     spreadsheetId: cfg.spreadsheetId,
     range: tabRange(cfg.sheetName, '1:1'),
   });
-  let headerRow = header.data.values?.[0] ?? [];
+  const headerRow = header.data.values?.[0] ?? [];
 
-  // One-time migration: a sheet built before the Cover Letter column existed
-  // has Notes/Stages sitting one column to the left of where SHEET_HEADERS
-  // now expects them. Appending headers at the end (the normal path below)
-  // would silently misread every row's Notes as Cover Letter and Stages as
-  // Notes from here on — so when that's the situation, insert a real
-  // spreadsheet column (which shifts every row's actual data with it, not
-  // just the header label) before doing anything else.
-  const coverLetterIdx = SHEET_HEADERS.indexOf('Cover Letter');
-  if (headerRow[coverLetterIdx] !== 'Cover Letter' && headerRow.includes('Notes')) {
-    const sheetId = (existingTab ?? meta.data.sheets?.find((s) => s.properties?.title === cfg.sheetName))
-      ?.properties?.sheetId;
-    if (sheetId == null) throw new Error(`Could not resolve sheetId for tab "${cfg.sheetName}" during migration.`);
-    await client.spreadsheets.batchUpdate({
-      spreadsheetId: cfg.spreadsheetId,
-      requestBody: {
-        requests: [
-          {
-            insertDimension: {
-              range: { sheetId, dimension: 'COLUMNS', startIndex: coverLetterIdx, endIndex: coverLetterIdx + 1 },
-              inheritFromBefore: false,
-            },
-          },
-        ],
-      },
-    });
-    await client.spreadsheets.values.update({
-      spreadsheetId: cfg.spreadsheetId,
-      range: tabRange(cfg.sheetName, `${columnLetter(coverLetterIdx)}1`),
-      valueInputOption: 'RAW',
-      requestBody: { values: [['Cover Letter']] },
-    });
-    headerRow = [...headerRow.slice(0, coverLetterIdx), 'Cover Letter', ...headerRow.slice(coverLetterIdx)];
-    await applyReadabilityFormatting(client, cfg, sheetId);
-  }
-
-  if (headerRow.length < SHEET_HEADERS.length) {
+  if (headerRow.length < headers.length) {
     await client.spreadsheets.values.update({
       spreadsheetId: cfg.spreadsheetId,
       range: tabRange(cfg.sheetName, `${columnLetter(headerRow.length)}1`),
       valueInputOption: 'RAW',
-      requestBody: { values: [SHEET_HEADERS.slice(headerRow.length)] },
+      requestBody: { values: [headers.slice(headerRow.length)] },
     });
   }
 
-  if (freshSheetId !== undefined) await applyReadabilityFormatting(client, cfg, freshSheetId);
+  if (freshSheetId !== undefined) await applyReadabilityFormatting(client, cfg, freshSheetId, headers);
+  return headers;
 }
 
-
 /**
- * Freeze + bold the header row, checkbox-ify Applied, dropdown-ify Stages
- * (matching STAGE_OPTIONS), wrap the long free-text columns, and narrow the
- * columns nobody reads at a glance (Job ID, URL). Applied once, right after
- * the tab is created or migrated to the current column layout — re-running
- * it on every sync would be wasted API calls and would fight any manual
- * formatting tweak Anshu makes afterward.
+ * Freeze + bold the header row, wrap the long free-text columns, and narrow
+ * the columns nobody reads at a glance (Job ID, URL). Applied once, right
+ * after the tab is created — re-running it on every sync would be wasted
+ * API calls and would fight any manual formatting tweak Anshu makes
+ * afterward.
  */
 async function applyReadabilityFormatting(
   client: sheets_v4.Sheets,
   cfg: SheetsConfig,
   sheetId: number,
+  headers: string[],
 ): Promise<void> {
+  const col = colIndex(headers);
   const lastRow = 5000; // generous fixed bound; cheap and avoids a row-count lookup
-  const wrapColumns = [COL.careerProfile, COL.technicalSkills, COL.coverLetter, COL.notes];
+  const wrapColumns = [col.careerProfile, col.coverLetter, col.notes];
 
   await client.spreadsheets.batchUpdate({
     spreadsheetId: cfg.spreadsheetId,
@@ -318,30 +356,30 @@ async function applyReadabilityFormatting(
             fields: 'userEnteredFormat(textFormat.bold,wrapStrategy)',
           },
         },
-        ...wrapColumns.map((col) => ({
+        ...wrapColumns.map((col2) => ({
           repeatCell: {
-            range: { sheetId, startRowIndex: 1, endRowIndex: lastRow, startColumnIndex: col, endColumnIndex: col + 1 },
+            range: { sheetId, startRowIndex: 1, endRowIndex: lastRow, startColumnIndex: col2, endColumnIndex: col2 + 1 },
             cell: { userEnteredFormat: { wrapStrategy: 'WRAP', verticalAlignment: 'TOP' } },
             fields: 'userEnteredFormat(wrapStrategy,verticalAlignment)',
           },
         })),
         {
           updateDimensionProperties: {
-            range: { sheetId, dimension: 'COLUMNS', startIndex: COL.jobId, endIndex: COL.jobId + 1 },
+            range: { sheetId, dimension: 'COLUMNS', startIndex: col.jobId, endIndex: col.jobId + 1 },
             properties: { pixelSize: 90 },
             fields: 'pixelSize',
           },
         },
         {
           updateDimensionProperties: {
-            range: { sheetId, dimension: 'COLUMNS', startIndex: 8, endIndex: 9 }, // URL
+            range: { sheetId, dimension: 'COLUMNS', startIndex: col.url, endIndex: col.url + 1 },
             properties: { pixelSize: 80 },
             fields: 'pixelSize',
           },
         },
-        ...wrapColumns.map((col) => ({
+        ...wrapColumns.map((col2) => ({
           updateDimensionProperties: {
-            range: { sheetId, dimension: 'COLUMNS', startIndex: col, endIndex: col + 1 },
+            range: { sheetId, dimension: 'COLUMNS', startIndex: col2, endIndex: col2 + 1 },
             properties: { pixelSize: 280 },
             fields: 'pixelSize',
           },
@@ -379,8 +417,8 @@ function nextTabName(currentName: string, existingTitles: string[]): string {
  * Rotates the tracker onto a fresh tab when the current one gets too long
  * to work with. Duplicates the tab via Sheets' own duplicateSheet request
  * rather than rebuilding it cell-by-cell — that's what carries over the
- * Table's typed Applied (BOOLEAN) and Stages (DROPDOWN) columns plus all
- * formatting, none of which the plain data-validation API can (re)create
+ * Table's typed Applied/Closed (BOOLEAN) and Stages (DROPDOWN) columns plus
+ * all formatting, none of which the plain data-validation API can (re)create
  * (see the comment in applyReadabilityFormatting). Then clears every data
  * row the duplicate copied over, leaving just the header and the Table
  * setup. Deterministic, no LLM — the caller (the `new-tracker-tab` CLI
@@ -389,7 +427,7 @@ function nextTabName(currentName: string, existingTitles: string[]): string {
  */
 export async function startNewTrackerTab(auth: OAuth2Client, cfg: SheetsConfig): Promise<NewTabResult> {
   const client = sheetsClient(auth);
-  await ensureSheetAndHeader(client, cfg);
+  const headers = await ensureSheetAndHeader(client, cfg);
 
   const meta = await client.spreadsheets.get({ spreadsheetId: cfg.spreadsheetId });
   const allSheets = meta.data.sheets ?? [];
@@ -423,7 +461,7 @@ export async function startNewTrackerTab(auth: OAuth2Client, cfg: SheetsConfig):
   // whatever Table/formatting setup came along with it.
   await client.spreadsheets.values.clear({
     spreadsheetId: cfg.spreadsheetId,
-    range: tabRange(newName, 'A2:P'),
+    range: tabRange(newName, `A2:${lastColumnLetter(headers)}`),
   });
 
   return { oldTab: cfg.sheetName, newTab: newName };
@@ -444,30 +482,27 @@ async function getExistingIds(client: sheets_v4.Sheets, cfg: SheetsConfig): Prom
   return new Set(ids);
 }
 
-/** 0-indexed column number -> A1 letter (0 -> 'A', 11 -> 'L', ...). Only needs single-letter range in this sheet's size. */
-function columnLetter(index: number): string {
-  return String.fromCharCode('A'.charCodeAt(0) + index);
-}
-
-function jobToRow(job: CleanJob, dateAdded: string): (string | number)[] {
-  return [
-    job.id,
-    job.title,
-    job.company,
-    job.location,
-    job.postedAt ?? '',
-    job.salary ?? '',
-    job.tags.join(', '),
-    job.fitReason ?? '',
-    job.url,
-    dateAdded,
-    '', // Applied — a checkbox Anshu ticks himself; sync-sheet reads it back, never writes it
-    '', // Career Profile — filled in later by reconcileSheetColumns, never at append time
-    '', // Technical Skills
-    '', // Cover Letter — filled in later, once the career-profile agent has run
-    '', // Notes
-    '', // Stages — Anshu's own manual dropdown; sync-sheet reads it back, never writes it
-  ];
+export function jobToRow(job: CleanJob, dateAdded: string, headers: string[]): (string | number)[] {
+  const cell: Record<string, string> = {
+    'Job ID': job.id,
+    Title: job.title,
+    Company: job.company,
+    Location: job.location,
+    Country: job.country ?? '',
+    URL: job.url,
+    'Applied/Closed': '', // a checkbox Anshu ticks himself; sync-sheet reads it back, never writes it
+    'Career Profile': '', // filled in later by reconcileSheetColumns, never at append time
+    'Cover Letter': '', // filled in later, once the career-profile agent has run
+    'Fit Reason': job.fitReason ?? '',
+    'Date Added': dateAdded,
+    'Date Posted': job.postedAt ?? '',
+    Tags: job.tags.join(', '),
+    Salary: job.salary ?? '',
+    Notes: '',
+    Stages: '', // Anshu's own manual dropdown; sync-sheet reads it back, never writes it
+    'Apply Method': applyMethodLabel(job.applyMethod),
+  };
+  return headers.map((h) => cell[h] ?? '');
 }
 
 export interface SyncResult {
@@ -484,7 +519,7 @@ export interface SyncResult {
  */
 export async function syncJobsToSheet(auth: OAuth2Client, cfg: SheetsConfig, jobs: CleanJob[]): Promise<SyncResult> {
   const client = sheetsClient(auth);
-  await ensureSheetAndHeader(client, cfg);
+  const headers = await ensureSheetAndHeader(client, cfg);
   const existingIds = await getExistingIds(client, cfg);
 
   const toAppend = jobs.filter((j) => !existingIds.has(j.id));
@@ -494,10 +529,10 @@ export async function syncJobsToSheet(auth: OAuth2Client, cfg: SheetsConfig, job
     const now = new Date().toISOString().slice(0, 10);
     await client.spreadsheets.values.append({
       spreadsheetId: cfg.spreadsheetId,
-      range: tabRange(cfg.sheetName, 'A:P'),
+      range: tabRange(cfg.sheetName, `A:${lastColumnLetter(headers)}`),
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: toAppend.map((j) => jobToRow(j, now)) },
+      requestBody: { values: toAppend.map((j) => jobToRow(j, now, headers)) },
     });
   }
 
@@ -508,7 +543,7 @@ export interface SheetReconcileResult {
   /** Jobs where the Sheet already had a Career Profile Anshu typed in by
    *  hand — pulled back so jobs.json matches and export-profile-inbox never
    *  sends these to the LLM step again. */
-  profilePulledBack: Array<{ id: string; careerProfile: string; technicalSkills: string[] }>;
+  profilePulledBack: Array<{ id: string; careerProfile: string }>;
   /** Same idea, for a Cover Letter Anshu typed in by hand. */
   coverLetterPulledBack: Array<{ id: string; coverLetter: string }>;
   /** Job ids whose Applied checkbox is ticked but pipelineStatus isn't
@@ -519,18 +554,47 @@ export interface SheetReconcileResult {
    *  is what stops selectForStage from sending the job to any agent again. */
   interviewStages: Array<{ id: string; stage: string }>;
   pushed: string[]; // job ids whose computed profile/cover-letter/note was written into the Sheet
+  /** What each Career Profile / Cover Letter cell holds after this reconcile; the caller stores it via setSheetSnapshot. */
+  snapshots: Array<{ id: string; careerProfile?: string; coverLetter?: string }>;
+  /** Job ids whose Applied checkbox was ticked from jobs.json (applied by the apply skills, not by hand in the Sheet). */
+  appliedPushed: string[];
+  /** Set when that tick could not be written (e.g. the Table's typed checkbox column refused it). Never fails the sync. */
+  appliedPushError?: string;
+}
+
+export type CellAction = 'none' | 'push' | 'pull';
+
+/**
+ * Which way a text cell (Career Profile / Cover Letter) should move.
+ *
+ * - Sheet empty: push whatever jobs.json has.
+ * - Same text: nothing to do.
+ * - Different, and the sheet still holds exactly what we last saw there
+ *   (`snapshot`): jobs.json was regenerated and the cell is stale, so push.
+ *   Without this rule a regenerated profile is overwritten by its own old
+ *   cell on the very next sync.
+ * - Different, and the sheet has changed since we last saw it (or we never
+ *   recorded a snapshot): Anshu typed there, his edit wins, pull it back.
+ */
+export function decideTextCell(jobValue: string | undefined, sheetValue: string, snapshot: string | undefined): CellAction {
+  const job = (jobValue ?? '').trim();
+  const sheet = sheetValue.trim();
+  if (!sheet) return job ? 'push' : 'none';
+  if (job === sheet) return 'none';
+  if (job && snapshot !== undefined && sheet === snapshot.trim()) return 'push';
+  return 'pull';
 }
 
 /**
  * Two-way, no-LLM reconciliation of every editable column on the sheet:
- * Career Profile / Technical Skills / Cover Letter / Notes push or pull
- * depending on which side has content (a non-empty cell Anshu typed by
- * hand always wins and is pulled back; otherwise whatever jobs.json has
- * gets pushed). Applied and Stages are pull-only — Anshu is the only
- * writer of those two columns, this only ever reads them back into
- * jobs.json (via the caller's updateStatus/setInterviewStage) so that a
- * manual tick or dropdown pick takes every downstream agent off that job's
- * case on the very next run. Nothing here calls an LLM.
+ * Career Profile / Cover Letter / Notes push or pull depending on which
+ * side has content (a non-empty cell Anshu typed by hand always wins and
+ * is pulled back; otherwise whatever jobs.json has gets pushed). Applied
+ * and Stages are pull-only — Anshu is the only writer of those two
+ * columns, this only ever reads them back into jobs.json (via the
+ * caller's updateStatus/setInterviewStage) so that a manual tick or
+ * dropdown pick takes every downstream agent off that job's case on the
+ * very next run. Nothing here calls an LLM.
  */
 export async function reconcileSheetColumns(
   auth: OAuth2Client,
@@ -538,10 +602,11 @@ export async function reconcileSheetColumns(
   jobsById: Map<string, Job>,
 ): Promise<SheetReconcileResult> {
   const client = sheetsClient(auth);
-  await ensureSheetAndHeader(client, cfg);
+  const headers = await ensureSheetAndHeader(client, cfg);
+  const col = colIndex(headers);
   const res = await client.spreadsheets.values.get({
     spreadsheetId: cfg.spreadsheetId,
-    range: tabRange(cfg.sheetName, 'A:P'),
+    range: tabRange(cfg.sheetName, `A:${lastColumnLetter(headers)}`),
   });
   const rows = res.data.values ?? [];
 
@@ -550,69 +615,95 @@ export async function reconcileSheetColumns(
   const markedApplied: string[] = [];
   const interviewStages: SheetReconcileResult['interviewStages'] = [];
   const pushed: string[] = [];
+  const snapshots: SheetReconcileResult['snapshots'] = [];
+  const appliedWrites: sheets_v4.Schema$ValueRange[] = [];
+  const appliedPushed: string[] = [];
   const writes: sheets_v4.Schema$ValueRange[] = [];
 
   // rows[0] is the header; sheet rows are 1-indexed, so data row i (0-based
   // into `rows`, i >= 1) sits at sheet row i + 1.
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] ?? [];
-    const id = String(row[COL.jobId] ?? '');
+    const id = String(row[col.jobId] ?? '');
     if (!id) continue;
     const job = jobsById.get(id);
     if (!job) continue; // row for a job no longer in jobs.json — leave it alone
 
     const sheetRowNum = i + 1;
 
-    // --- Career Profile / Technical Skills ---
-    const sheetProfile = String(row[COL.careerProfile] ?? '').trim();
-    if (sheetProfile) {
-      const sheetSkills = String(row[COL.technicalSkills] ?? '').trim();
-      const skills = sheetSkills ? sheetSkills.split(',').map((s) => s.trim()).filter(Boolean) : [];
-      if (job.careerProfile !== sheetProfile || (job.technicalSkills ?? []).join(',') !== skills.join(',')) {
-        profilePulledBack.push({ id, careerProfile: sheetProfile, technicalSkills: skills });
-      }
-    } else if (job.careerProfile) {
-      writes.push({
-        range: tabRange(cfg.sheetName, `L${sheetRowNum}:M${sheetRowNum}`),
-        values: [[job.careerProfile, (job.technicalSkills ?? []).join(', ')]],
-      });
+    // --- Career Profile / Cover Letter (see decideTextCell for the rule) ---
+    const snapshot: { id: string; careerProfile?: string; coverLetter?: string } = { id };
+
+    const sheetProfile = String(row[col.careerProfile] ?? '').trim();
+    const profileAction = decideTextCell(job.careerProfile, sheetProfile, job.sheetCareerProfile);
+    if (profileAction === 'pull') {
+      profilePulledBack.push({ id, careerProfile: sheetProfile });
+      snapshot.careerProfile = sheetProfile;
+    } else if (profileAction === 'push') {
+      const text = (job.careerProfile ?? '').trim();
+      writes.push({ range: tabRange(cfg.sheetName, `${columnLetter(col.careerProfile)}${sheetRowNum}`), values: [[text]] });
       pushed.push(id);
+      snapshot.careerProfile = text;
+    } else if (sheetProfile) {
+      snapshot.careerProfile = sheetProfile;
     }
 
-    // --- Cover Letter ---
-    const sheetCoverLetter = String(row[COL.coverLetter] ?? '').trim();
-    if (sheetCoverLetter) {
-      if (job.coverLetter !== sheetCoverLetter) {
-        coverLetterPulledBack.push({ id, coverLetter: sheetCoverLetter });
-      }
-    } else if (job.coverLetter) {
-      writes.push({
-        range: tabRange(cfg.sheetName, `N${sheetRowNum}`),
-        values: [[job.coverLetter]],
-      });
+    const sheetCoverLetter = String(row[col.coverLetter] ?? '').trim();
+    const letterAction = decideTextCell(job.coverLetter, sheetCoverLetter, job.sheetCoverLetter);
+    if (letterAction === 'pull') {
+      coverLetterPulledBack.push({ id, coverLetter: sheetCoverLetter });
+      snapshot.coverLetter = sheetCoverLetter;
+    } else if (letterAction === 'push') {
+      const text = (job.coverLetter ?? '').trim();
+      writes.push({ range: tabRange(cfg.sheetName, `${columnLetter(col.coverLetter)}${sheetRowNum}`), values: [[text]] });
       pushed.push(id);
+      snapshot.coverLetter = text;
+    } else if (sheetCoverLetter) {
+      snapshot.coverLetter = sheetCoverLetter;
     }
+    if (snapshot.careerProfile !== undefined || snapshot.coverLetter !== undefined) snapshots.push(snapshot);
 
     // --- Notes: reflects whichever agent-side note (if any) is pending ---
-    const desiredNote = job.profileNote ?? job.coverLetterNote ?? '';
-    const currentNote = String(row[COL.notes] ?? '').trim();
+    const desiredNote = job.profileNote ?? job.coverLetterNote ?? job.applyNote ?? '';
+    const currentNote = String(row[col.notes] ?? '').trim();
     if (desiredNote !== currentNote) {
       writes.push({
-        range: tabRange(cfg.sheetName, `O${sheetRowNum}`),
+        range: tabRange(cfg.sheetName, `${columnLetter(col.notes)}${sheetRowNum}`),
         values: [[desiredNote]],
       });
       pushed.push(id);
     }
 
+    // --- Apply Method: push-only, jobs.json is the only source (set at scrape time or by set-apply-method) ---
+    if (col.applyMethod >= 0) {
+      const desiredMethod = applyMethodLabel(job.applyMethod);
+      const currentMethod = String(row[col.applyMethod] ?? '').trim();
+      if (desiredMethod && desiredMethod !== currentMethod) {
+        writes.push({
+          range: tabRange(cfg.sheetName, `${columnLetter(col.applyMethod)}${sheetRowNum}`),
+          values: [[desiredMethod]],
+        });
+        pushed.push(id);
+      }
+    }
+
     // --- Applied checkbox: pull-back only, Anshu is the only writer ---
-    const appliedCell = row[COL.applied];
+    const appliedCell = row[col.applied];
     const appliedChecked = appliedCell === true || /^(true|yes|1)$/i.test(String(appliedCell ?? ''));
     if (appliedChecked && job.pipelineStatus !== 'applied') {
       markedApplied.push(id);
     }
+    // The one push: a job the apply skills submitted (applyNote is set only by
+    // them or by mark-applied --note) gets its checkbox ticked here, so the
+    // skills never have to drive the Sheet UI. A plain manual mark-applied
+    // carries no applyNote and is left alone.
+    if (!appliedChecked && job.pipelineStatus === 'applied' && job.applyNote && col.applied >= 0) {
+      appliedWrites.push({ range: tabRange(cfg.sheetName, `${columnLetter(col.applied)}${sheetRowNum}`), values: [[true]] });
+      appliedPushed.push(id);
+    }
 
     // --- Stages: pull-back only, Anshu is the only writer ---
-    const sheetStage = String(row[COL.stages] ?? '').trim();
+    const sheetStage = String(row[col.stages] ?? '').trim();
     if (sheetStage && job.interviewStage !== sheetStage) {
       interviewStages.push({ id, stage: sheetStage });
     }
@@ -625,5 +716,20 @@ export async function reconcileSheetColumns(
     });
   }
 
-  return { profilePulledBack, coverLetterPulledBack, markedApplied, interviewStages, pushed };
+  // Separate from the text writes above so a refusal from the Table's typed
+  // checkbox column can never take the profile/cover-letter push down with it.
+  let appliedPushError: string | undefined;
+  if (appliedWrites.length > 0) {
+    try {
+      await client.spreadsheets.values.batchUpdate({
+        spreadsheetId: cfg.spreadsheetId,
+        requestBody: { valueInputOption: 'USER_ENTERED', data: appliedWrites },
+      });
+    } catch (err) {
+      appliedPushError = String(err);
+      appliedPushed.length = 0;
+    }
+  }
+
+  return { profilePulledBack, coverLetterPulledBack, markedApplied, interviewStages, pushed, snapshots, appliedPushed, appliedPushError };
 }

@@ -250,6 +250,226 @@
       "maxPages": 3,
       "maxAgeDays": 14,
       "enabled": true
+    },
+    {
+      "label": "canberra-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "All Canberra ACT",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "adelaide-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "Adelaide SA",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "newcastle-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "Newcastle, Maitland & Hunter NSW",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "wollongong-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "Wollongong, Illawarra & South Coast NSW",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "geelong-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "South West Coast VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "gold-coast-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "Gold Coast QLD",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "ballarat-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "Ballarat & Central Highlands VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "sunshine-coast-fullstack",
+      "query": "full stack developer java spring react",
+      "location": "Sunshine Coast QLD",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 2,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "canberra-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Canberra, Australian Capital Territory, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "adelaide-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Adelaide, South Australia, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "newcastle-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Newcastle, New South Wales, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "wollongong-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Wollongong, New South Wales, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "geelong-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Geelong, Victoria, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "gold-coast-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Gold Coast, Queensland, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "ballarat-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Ballarat, Victoria, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "sunshine-coast-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Sunshine Coast, Queensland, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "halifax-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Halifax, Nova Scotia, Canada",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "waterloo-software-engineer",
+      "query": "software engineer OR full stack developer",
+      "location": "Waterloo, Ontario, Canada",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "cork-software-developer",
+      "query": "software developer OR full stack developer",
+      "location": "Cork, Ireland",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
+    },
+    {
+      "label": "manchester-software-engineer-sponsorship",
+      "query": "software engineer visa sponsorship",
+      "location": "Manchester, United Kingdom",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 14,
+      "enabled": true
     }
   ],
   "pipeline": {
@@ -258,12 +478,18 @@
     "fitInboxMaxAgeDays": 14,
     "sheets": {
       "spreadsheetId": "",
-      "sheetName": "Tracker",
+      "sheetName": "Tracker 2",
       "oauthClientPath": "./config/google-oauth-client.json",
       "oauthTokenPath": "./config/google-oauth-token.json"
     },
     "profileInboxPath": "./data/stage/profile-inbox.json",
     "coverLetterInboxPath": "./data/stage/cover-letter-inbox.json",
+    "documentsManifestPath": "./data/stage/documents-manifest.json",
+    "documentsOutputDir": "C:\\Users\\madhi\\OneDrive\\Documents\\Resumes Gen",
+    "documentsResumeDocs": {
+      "softwareEngineer": "1Ckp91JCvQGZFhrkzc-lgzIMyqauBF8b4ShjOdS2N2dw",
+      "testAnalyst": "15gKsst2OHNSaGPsYbtqUIbpKRS6M2ptet7uMdllp5KI"
+    },
     "sheetsIntl": {
       "spreadsheetId": "",
       "sheetName": "Tracker",

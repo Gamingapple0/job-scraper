@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { loadConfig, type Config, type SearchConfig } from './core/config.js';
@@ -13,7 +15,33 @@ import { runSearch } from './core/pipeline.js';
 import { createAdapter, availableSources, hasAdapter } from './adapters/registry.js';
 import type { Job, PipelineStatus, RawJob, RunOptions, RunStats, SearchQuery } from './core/types.js';
 import { toCsv, parseDuration, formatLocation, formatSalary } from './core/export.js';
-import { toCleanJob, selectForStage, toProfileJob, toCoverLetterJob, type CleanJob } from './core/stage-export.js';
+import {
+  toCleanJob,
+  selectForStage,
+  toProfileJob,
+  toCoverLetterJob,
+  toMaterialsJob,
+  toDocumentJob,
+  buildResumeFileName,
+  buildCoverLetterFileName,
+  resumeDocFor,
+  pickResumeVersion,
+  type CleanJob,
+} from './core/stage-export.js';
+import { RESUME_VERSIONS } from './core/resume-version.js';
+import { applyMaterials, MaterialsVerdictsSchema, type MaterialsReport, type MaterialsVerdict } from './core/materials.js';
+import {
+  batchRootWindows,
+  emptyIndex,
+  findActiveBatch,
+  inputsHash,
+  newBatchName,
+  pickFileNames,
+  readIndex,
+  resolveCompanyFolder,
+  writeIndex,
+} from './core/documents-index.js';
+import { buildApplyQueue, platformOf } from './core/apply-queue.js';
 import {
   getAuthorizedClient,
   runInteractiveAuth,
@@ -364,24 +392,44 @@ program
     rt.logger.info(`Wrote ${selected.length} job(s) awaiting a career profile to ${outPath}`);
   });
 
+const ResumeVersionEnum = z.enum(RESUME_VERSIONS as [string, ...string[]]);
+
+/** Shared by every apply-* command: print the outcome and exit non-zero when anything was rejected, so a scheduled run notices. */
+function reportMaterials(rt: Runtime, label: string, report: MaterialsReport, dryRun: boolean): void {
+  rt.logger.info(
+    `${label}${dryRun ? ' (dry run, nothing written)' : ''}: ${report.profilesWritten} career profile(s), ` +
+      `${report.lettersWritten} cover letter(s) accepted, ${report.flagged} flagged for review, ${report.skipped.length} rejected.`,
+  );
+  for (const s of report.skipped.slice(0, 40)) rt.logger.warn(`Rejected ${s.id} [${s.piece}]: ${s.reasons.join('; ')}`);
+  console.log(`MATERIALS_RESULT ${JSON.stringify(report)}`);
+  if (report.skipped.length > 0) process.exitCode = 3;
+}
+
 const ProfileVerdictsSchema = z.array(
   z.union([
-    z.object({ id: z.string(), career_profile: z.string(), technical_skills: z.array(z.string()) }),
-    z.object({ id: z.string(), error: z.literal('disqualifying_requirement') }),
-    z.object({ id: z.string(), error: z.literal('needs_clarification'), questions: z.array(z.string()).min(1) }),
+    z.object({ id: z.string(), resume_version: ResumeVersionEnum, career_profile: z.string() }),
+    z.object({ id: z.string(), resume_version: ResumeVersionEnum, error: z.literal('disqualifying_requirement') }),
+    z.object({
+      id: z.string(),
+      resume_version: ResumeVersionEnum,
+      error: z.literal('needs_clarification'),
+      questions: z.array(z.string()).min(1),
+    }),
   ]),
 );
 
 program
   .command('apply-career-profiles <file>')
   .description(
-    'Apply the career-profile tailoring step\'s output back into the master file. Plain code — ' +
-      'the LLM step never touches jobs.json directly. Accepts the tailoring prompt\'s own per-job ' +
-      'JSON shape, each entry tagged with the job id: {id, career_profile, technical_skills} on ' +
-      'success, or {id, error: "disqualifying_requirement"} / {id, error: "needs_clarification", ' +
-      'questions} when the LLM couldn\'t produce one. Never touches pipelineStatus.',
+    'Apply the career-profile step\'s output back into the master file. Plain code: the LLM never ' +
+      'touches jobs.json directly. Each entry is {id, resume_version, career_profile} on success, or ' +
+      '{id, resume_version, error: "disqualifying_requirement"} / {id, resume_version, error: ' +
+      '"needs_clarification", questions}. resume_version must equal the job\'s own classification ' +
+      '(the inbox carries it) and every profile passes the deterministic lint, otherwise the entry is ' +
+      'rejected. Prefer apply-materials, which handles the profile and the cover letter together.',
   )
-  .action(async (file) => {
+  .option('--dry-run', 'validate only, write nothing')
+  .action(async (file, opts) => {
     const g = program.opts();
     const cfg = await loadConfig(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
@@ -389,37 +437,13 @@ program
 
     const parsed = ProfileVerdictsSchema.safeParse(JSON.parse(await readFile(resolve(file), 'utf8')));
     if (!parsed.success) {
-      rt.logger.error(`${file} is not a valid career-profile verdicts file`, parsed.error.issues);
+      rt.logger.error(`${file} is not a valid career-profile verdicts file (every entry needs id and resume_version)`, parsed.error.issues);
       process.exitCode = 2;
       return;
     }
-
-    let done = 0;
-    let flagged = 0;
-    const skipped: Array<{ id: string; reason: string }> = [];
-    for (const v of parsed.data) {
-      const res =
-        'career_profile' in v
-          ? rt.store.setProfile(v.id, { careerProfile: v.career_profile, technicalSkills: v.technical_skills })
-          : rt.store.setProfile(v.id, {
-              profileNote:
-                v.error === 'disqualifying_requirement'
-                  ? 'DISQUALIFYING REQUIREMENT (visa/clearance/citizenship) — review manually.'
-                  : `NEEDS CLARIFICATION: ${v.questions.join(' | ')}`,
-            });
-      if (!res.ok) {
-        skipped.push({ id: v.id, reason: res.reason });
-        continue;
-      }
-      if ('career_profile' in v) done++;
-      else flagged++;
-    }
-
-    await rt.store.save();
-    rt.logger.info(
-      `Career profiles: ${done} written, ${flagged} flagged for review, ${skipped.length} skipped.`,
-    );
-    for (const s of skipped.slice(0, 20)) rt.logger.warn(`Skipped ${s.id}: ${s.reason}`);
+    const report = applyMaterials(rt.store, parsed.data as MaterialsVerdict[], { dryRun: opts.dryRun });
+    if (!opts.dryRun) await rt.store.save();
+    reportMaterials(rt, 'Career profiles', report, Boolean(opts.dryRun));
   });
 
 /* ----------------------------------------------------- stage: cover letter */
@@ -451,19 +475,25 @@ program
 
 const CoverLetterVerdictsSchema = z.array(
   z.union([
-    z.object({ id: z.string(), cover_letter: z.string() }),
-    z.object({ id: z.string(), error: z.literal('needs_clarification'), questions: z.array(z.string()).min(1) }),
+    z.object({ id: z.string(), resume_version: ResumeVersionEnum, cover_letter: z.string() }),
+    z.object({
+      id: z.string(),
+      resume_version: ResumeVersionEnum,
+      error: z.literal('needs_clarification'),
+      questions: z.array(z.string()).min(1),
+    }),
   ]),
 );
 
 program
   .command('apply-cover-letters <file>')
   .description(
-    'Apply the cover-letter drafting step\'s output back into the master file. Plain code — ' +
-      'the LLM step never touches jobs.json directly. Accepts {id, cover_letter} on success, or ' +
-      '{id, error: "needs_clarification", questions} when the LLM couldn\'t produce one.',
+    'Apply the cover-letter step\'s output back into the master file. Each entry is {id, resume_version, ' +
+      'cover_letter} on success, or {id, resume_version, error: "needs_clarification", questions}. Same ' +
+      'version check and lint as apply-career-profiles. Prefer apply-materials.',
   )
-  .action(async (file) => {
+  .option('--dry-run', 'validate only, write nothing')
+  .action(async (file, opts) => {
     const g = program.opts();
     const cfg = await loadConfig(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
@@ -471,40 +501,307 @@ program
 
     const parsed = CoverLetterVerdictsSchema.safeParse(JSON.parse(await readFile(resolve(file), 'utf8')));
     if (!parsed.success) {
-      rt.logger.error(`${file} is not a valid cover-letter verdicts file`, parsed.error.issues);
+      rt.logger.error(`${file} is not a valid cover-letter verdicts file (every entry needs id and resume_version)`, parsed.error.issues);
+      process.exitCode = 2;
+      return;
+    }
+    const verdicts: MaterialsVerdict[] = parsed.data.map((v) =>
+      'error' in v ? { ...v, error_stage: 'cover_letter' as const } : v,
+    ) as MaterialsVerdict[];
+    const report = applyMaterials(rt.store, verdicts, { dryRun: opts.dryRun });
+    if (!opts.dryRun) await rt.store.save();
+    reportMaterials(rt, 'Cover letters', report, Boolean(opts.dryRun));
+  });
+
+/* ------------------------------------ stage: career profile + cover letter */
+
+program
+  .command('export-materials-inbox')
+  .description(
+    'Write one small file for the combined career-profile + cover-letter step: every tracked, open job ' +
+      'that still needs either piece (missing, or written from a different resume version than the job ' +
+      'classifies as now), the JD once, which base resume file to use, and which pieces are needed. No LLM ' +
+      'involved in building it.',
+  )
+  .option('-o, --out <path>', 'override pipeline.materialsInboxPath')
+  .action(async (opts) => {
+    const g = program.opts();
+    const cfg = await loadConfig(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+
+    const jobs = dedupeById(rt.store.all());
+    const selected = selectForStage(jobs, 'materials');
+    selected.sort((a, b) => (b.postedAt ?? b.scrapedAt).localeCompare(a.postedAt ?? a.scrapedAt));
+
+    const items = selected.map(toMaterialsJob);
+    const outPath = resolve(opts.out ?? cfg.pipeline.materialsInboxPath);
+    await mkdir(dirname(outPath), { recursive: true });
+    await writeFile(outPath, JSON.stringify(items, null, 2), 'utf8');
+
+    const byVersion = (v: string) => items.filter((i) => i.resumeVersion === v).length;
+    const both = items.filter((i) => i.needs.length === 2).length;
+    rt.logger.info(
+      `Wrote ${items.length} job(s) to ${outPath}: ${both} need both pieces, ${items.length - both} need one; ` +
+        `${byVersion('software-engineer')} software-engineer, ${byVersion('test-analyst')} test-analyst.`,
+    );
+  });
+
+program
+  .command('apply-materials <file>')
+  .description(
+    'Apply the combined step\'s output back into the master file. Entries: {id, resume_version, career_profile?, ' +
+      'cover_letter?} or {id, resume_version, error: "disqualifying_requirement" | "needs_clarification", ' +
+      'questions?, error_stage?}. resume_version must match the job\'s classification and every text passes ' +
+      'the deterministic lint (em dashes, word counts, placeholders, company mention, salutation). Rejected ' +
+      'entries are listed with reasons, nothing else is affected, and the exit code is 3 so the caller can ' +
+      'fix just those and re-run. --dry-run validates without writing.',
+  )
+  .option('--dry-run', 'validate only, write nothing')
+  .action(async (file, opts) => {
+    const g = program.opts();
+    const cfg = await loadConfig(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+
+    const parsed = MaterialsVerdictsSchema.safeParse(JSON.parse(await readFile(resolve(file), 'utf8')));
+    if (!parsed.success) {
+      rt.logger.error(`${file} is not a valid materials verdicts file`, parsed.error.issues);
+      process.exitCode = 2;
+      return;
+    }
+    const report = applyMaterials(rt.store, parsed.data, { dryRun: opts.dryRun });
+    if (!opts.dryRun) await rt.store.save();
+    reportMaterials(rt, 'Materials', report, Boolean(opts.dryRun));
+  });
+
+/* -------------------------------------------------------------- documents */
+
+
+program
+  .command('generate-documents')
+  .description(
+    'Zero-LLM-cost stage: for every unapplied tracked job whose career profile and cover letter are ' +
+      'present and current (written from the resume version the job classifies as), swap the profile ' +
+      'into the matching base resume Google Doc, build a matching cover letter, and export both as PDFs ' +
+      'into one folder per company inside a brand-new timestamped batch folder under ' +
+      'pipeline.documentsOutputDir (override the root with $SCRAPER_DOCS_OUTPUT_DIR inside the Claude ' +
+      'Cowork device_bash sandbox). Every run starts a fresh batch folder: a still-open job unchanged since ' +
+      'the last run has its existing PDFs copied across (not rebuilt); an applied/closed job is simply left ' +
+      'out, so the new batch only ever holds what is still pending, never growing without bound. Only new or ' +
+      'changed jobs are rebuilt (--force rebuilds everything). documents-index.json in the batch folder ' +
+      'records which files belong to which job. ' +
+      'International jobs get a +61 phone and a "PTE: 88" headline addition. Needs python3 (python-docx) ' +
+      'and LibreOffice (soffice) on PATH.',
+  )
+  .option('--force', 'rebuild every eligible job, not just new or changed ones (use after editing a base resume Google Doc)')
+  .action(async (opts) => {
+    const g = program.opts();
+    const cfg = await loadConfig(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+
+    const jobs = dedupeById(rt.store.all());
+    const selected = selectForStage(jobs, 'documents');
+    if (selected.length === 0) {
+      rt.logger.info(
+        'No unapplied jobs are ready for documents yet (need a current career profile and cover letter, ' +
+          'both written from the resume version the job classifies as).',
+      );
+      return;
+    }
+
+    const outRoot = process.env.SCRAPER_DOCS_OUTPUT_DIR || cfg.pipeline.documentsOutputDir;
+    await mkdir(outRoot, { recursive: true });
+
+    // Every run gets a brand-new timestamped batch folder rather than growing
+    // the last one forever. The previous batch (if any) is only consulted as
+    // a migration source: a still-open job (still selected for 'documents'
+    // above) whose inputs haven't changed has its existing PDFs copied
+    // across instead of rebuilt; a job that dropped out of selection since
+    // then (applied, closed, or given an interview-stage outcome) is simply
+    // not copied forward, so its company folder is left behind in the
+    // previous batch and the new one never grows to include it.
+    const previousBatchName = await findActiveBatch(outRoot);
+    const previousIndex = previousBatchName
+      ? await readIndex(join(outRoot, previousBatchName), batchRootWindows(cfg.pipeline.documentsOutputDir, previousBatchName))
+      : null;
+
+    const batch = newBatchName();
+    const outBase = join(outRoot, batch);
+    await mkdir(outBase, { recursive: true });
+    const index = emptyIndex(batchRootWindows(cfg.pipeline.documentsOutputDir, batch));
+    const folders: string[] = [];
+
+    const toPdf = (docxName: string) => docxName.replace(/\.docx$/i, '.pdf');
+    const manifest: Array<Record<string, unknown>> = [];
+    const pending = new Map<string, { hash: string; folder: string; resume: string; coverLetter: string; title: string; company: string; version: string }>();
+    let upToDate = 0;
+    let migrated = 0;
+
+    for (const job of selected) {
+      const dj = toDocumentJob(job);
+      const resumeDocId = resumeDocFor(dj.resumeVersion, cfg);
+      const hash = inputsHash({
+        company: dj.company,
+        title: dj.title,
+        careerProfile: dj.careerProfile,
+        coverLetter: dj.coverLetter,
+        resumeVersion: dj.resumeVersion,
+        resumeDocId,
+        relocationNote: dj.relocationNote,
+        isInternational: dj.isInternational,
+      });
+
+      const prevEntry = previousIndex?.jobs[job.id];
+      const prevFilesExist =
+        previousBatchName !== null &&
+        prevEntry !== undefined &&
+        existsSync(join(outRoot, previousBatchName, prevEntry.folder, prevEntry.resume)) &&
+        existsSync(join(outRoot, previousBatchName, prevEntry.folder, prevEntry.coverLetter));
+
+      if (!opts.force && prevEntry && prevEntry.hash === hash && prevFilesExist) {
+        // Unchanged since the previous batch and still open: carry the PDFs
+        // forward by copying rather than paying for another LibreOffice run.
+        const destFolder = join(outBase, prevEntry.folder);
+        await mkdir(destFolder, { recursive: true });
+        await copyFile(join(outRoot, previousBatchName as string, prevEntry.folder, prevEntry.resume), join(destFolder, prevEntry.resume));
+        await copyFile(
+          join(outRoot, previousBatchName as string, prevEntry.folder, prevEntry.coverLetter),
+          join(destFolder, prevEntry.coverLetter),
+        );
+        index.jobs[job.id] = { ...prevEntry };
+        if (!folders.some((f) => f.toLowerCase() === prevEntry.folder.toLowerCase())) folders.push(prevEntry.folder);
+        upToDate++;
+        migrated++;
+        continue;
+      }
+
+      // Keep a job in the folder it already had; otherwise reuse the company's folder already placed in this batch, or start one.
+      const folder = prevEntry?.folder ?? resolveCompanyFolder(folders, dj.company);
+      if (!folders.some((f) => f.toLowerCase() === folder.toLowerCase())) folders.push(folder);
+      const names = pickFileNames(
+        index,
+        job.id,
+        folder,
+        toPdf(buildResumeFileName(dj.title, dj.company)),
+        toPdf(buildCoverLetterFileName(dj.title, dj.company)),
+      );
+      // Reserve the names now so two roles at one company in this same batch cannot collide either.
+      index.jobs[job.id] = {
+        company: dj.company,
+        title: dj.title,
+        folder,
+        resume: names.resume,
+        coverLetter: names.coverLetter,
+        resumeVersion: dj.resumeVersion,
+        hash: '',
+        generatedAt: '',
+      };
+      pending.set(job.id, { hash, folder, resume: names.resume, coverLetter: names.coverLetter, title: dj.title, company: dj.company, version: dj.resumeVersion });
+
+      manifest.push({
+        id: job.id,
+        company: dj.company,
+        careerProfile: dj.careerProfile,
+        coverLetter: dj.coverLetter,
+        relocationNote: dj.relocationNote,
+        isInternational: dj.isInternational,
+        resumeDocId,
+        outDir: join(outBase, folder),
+        resumeFileName: names.resume.replace(/\.pdf$/i, '.docx'),
+        coverLetterFileName: names.coverLetter.replace(/\.pdf$/i, '.docx'),
+      });
+    }
+
+    if (manifest.length === 0) {
+      await writeIndex(outBase, index);
+      const folderCount = new Set(Object.values(index.jobs).map((e) => e.folder.toLowerCase())).size;
+      rt.logger.info(
+        `Documents: all ${upToDate} eligible job(s) already up to date — carried forward into new batch ${batch} ` +
+          `(${folderCount} company folder(s)) under ${outRoot}. Nothing to build (--force rebuilds).` +
+          (previousBatchName ? ` Previous batch ${previousBatchName} left as-is.` : ''),
+      );
+      return;
+    }
+
+    const manifestPath = resolve(cfg.pipeline.documentsManifestPath);
+    await mkdir(dirname(manifestPath), { recursive: true });
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+    const scriptPath = resolve('scripts/generate_documents.py');
+    const proc = spawnSync('python3', [scriptPath, manifestPath], {
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    if (proc.error) {
+      rt.logger.error(`Could not run generate_documents.py: ${proc.error.message}`);
+      process.exitCode = 2;
+      return;
+    }
+    if (proc.status !== 0) {
+      rt.logger.error(`generate_documents.py exited ${proc.status}: ${proc.stderr}`);
       process.exitCode = 2;
       return;
     }
 
-    let done = 0;
-    let flagged = 0;
-    const skipped: Array<{ id: string; reason: string }> = [];
-    for (const v of parsed.data) {
-      const res =
-        'cover_letter' in v
-          ? rt.store.setCoverLetter(v.id, { coverLetter: v.cover_letter })
-          : rt.store.setCoverLetter(v.id, { coverLetterNote: `NEEDS CLARIFICATION: ${v.questions.join(' | ')}` });
-      if (!res.ok) {
-        skipped.push({ id: v.id, reason: res.reason });
-        continue;
-      }
-      if ('cover_letter' in v) done++;
-      else flagged++;
+    let results: Array<{ id: string; ok: boolean; error?: string; warning?: string }>;
+    try {
+      results = JSON.parse(proc.stdout.trim().split('\n').pop() ?? '[]');
+    } catch {
+      rt.logger.error(`Could not parse generate_documents.py output: ${proc.stdout}`);
+      process.exitCode = 2;
+      return;
     }
 
-    await rt.store.save();
+    const now = new Date().toISOString();
+    const okIds = new Set(results.filter((r) => r.ok).map((r) => r.id));
+    for (const [id, p] of pending) {
+      if (okIds.has(id)) {
+        index.jobs[id] = {
+          company: p.company,
+          title: p.title,
+          folder: p.folder,
+          resume: p.resume,
+          coverLetter: p.coverLetter,
+          resumeVersion: p.version as 'software-engineer' | 'test-analyst',
+          hash: p.hash,
+          generatedAt: now,
+        };
+      } else {
+        delete index.jobs[id]; // failed to build in this fresh batch: leave no half-entry behind
+      }
+    }
+    await writeIndex(outBase, index);
+
+    const failed = results.filter((r) => !r.ok);
+    const folderCount = new Set(Object.values(index.jobs).map((e) => e.folder.toLowerCase())).size;
     rt.logger.info(
-      `Cover letters: ${done} written, ${flagged} flagged for review, ${skipped.length} skipped.`,
+      `Documents: ${okIds.size} job(s) built, ${migrated} carried forward unchanged, into ${folderCount} company ` +
+        `folder(s) in new batch ${batch} under ${outRoot}, ${failed.length} failed.` +
+        (previousBatchName ? ` Previous batch ${previousBatchName} left as-is (applied/closed jobs stay behind there).` : ''),
     );
-    for (const s of skipped.slice(0, 20)) rt.logger.warn(`Skipped ${s.id}: ${s.reason}`);
+    for (const f of failed.slice(0, 20)) {
+      const j = selected.find((sel) => sel.id === f.id);
+      rt.logger.warn(`Skipped ${j ? `${j.title} at ${j.company}` : f.id}: ${f.error}`);
+    }
+    for (const r of results.filter((x) => x.ok && x.warning).slice(0, 20)) {
+      const j = selected.find((sel) => sel.id === r.id);
+      rt.logger.warn(`${j ? `${j.title} at ${j.company}` : r.id}: ${r.warning}`);
+    }
   });
 
 /* -------------------------------------------------------- marking applied */
 
 program
   .command('mark-applied [ids...]')
-  .description('Mark one or more jobs applied by id. Manual escape hatch alongside sync-applied.')
+  .description(
+    'Mark one or more jobs applied by id. With --note the text is stored as the job\'s applyNote, ' +
+      'which sync-sheet shows in the Notes column and uses to tick the Applied checkbox in the Sheet ' +
+      '(the apply skills pass --note "Applied by llm"). Manual escape hatch alongside sync-applied.',
+  )
   .option('--from <file>', 'read ids from a text file, one per line, instead of/in addition to arguments')
+  .option('--note <text>', 'record an applyNote on each job (marks it as applied by automation)')
   .action(async (ids: string[], opts) => {
     const g = program.opts();
     const cfg = await loadConfig(resolve(g.config));
@@ -524,12 +821,119 @@ program
 
     let applied = 0;
     for (const id of allIds) {
-      const res = rt.store.updateStatus(id, 'applied', { actor: 'manual' });
-      if (res.ok) applied++;
-      else rt.logger.warn(`Skipped ${id}: ${res.reason}`);
+      const res = rt.store.updateStatus(id, 'applied', { actor: opts.note ? 'apply-skill' : 'manual' });
+      if (res.ok) {
+        applied++;
+        if (opts.note) rt.store.setApplyNote(id, String(opts.note));
+      } else rt.logger.warn(`Skipped ${id}: ${res.reason}`);
     }
     await rt.store.save();
     rt.logger.info(`Marked ${applied} of ${allIds.length} job(s) applied.`);
+  });
+
+program
+  .command('apply-note <id> <text...>')
+  .description(
+    'Record why the apply skills could not submit a job (for example "Q: <exact screening question>" or ' +
+      '"External apply only"). The job stays unapplied but drops out of the apply queue until the note is ' +
+      'cleared (--clear) or the queue is built with --retry. sync-sheet shows the note in the Notes column.',
+  )
+  .option('--clear', 'remove the note instead of setting it')
+  .action(async (id: string, text: string[], opts) => {
+    const g = program.opts();
+    const cfg = await loadConfig(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+    const res = rt.store.setApplyNote(id, opts.clear ? undefined : text.join(' '));
+    if (!res.ok) {
+      rt.logger.error(`Unknown job id ${id}.`);
+      process.exitCode = 2;
+      return;
+    }
+    await rt.store.save();
+    rt.logger.info(opts.clear ? `Cleared the apply note on ${id}.` : `Recorded the apply note on ${id}.`);
+  });
+
+program
+  .command('set-apply-method <id> <method>')
+  .description(
+    'Record how a job is applied to (easy_apply | quick_apply | external), once the apply skill has ' +
+      'actually seen the listing and knows. Seek jobs already get this for free at scrape time from the ' +
+      'listing\'s own isLinkOut flag; this command is for LinkedIn, which never exposes Easy Apply status ' +
+      'to a logged-out scrape, so it can only be learned live. Once set, export-apply-queue never has to ' +
+      'send that job back to a browser just to re-check.',
+  )
+  .action(async (id: string, method: string) => {
+    const g = program.opts();
+    const cfg = await loadConfig(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+    if (method !== 'easy_apply' && method !== 'quick_apply' && method !== 'external') {
+      rt.logger.error(`Unknown apply method "${method}". Must be one of: easy_apply, quick_apply, external.`);
+      process.exitCode = 2;
+      return;
+    }
+    const res = rt.store.setApplyMethod(id, method);
+    if (!res.ok) {
+      rt.logger.error(`Unknown job id ${id}.`);
+      process.exitCode = 2;
+      return;
+    }
+    await rt.store.save();
+    rt.logger.info(`Recorded apply method "${method}" on ${id}.`);
+  });
+
+program
+  .command('export-apply-queue')
+  .description(
+    'Write data/stage/apply-queue.json: the jobs ready to submit on LinkedIn (Easy Apply) or SEEK (Quick ' +
+      'Apply), with tailored text and the exact resume / cover letter PDF paths from documents-index.json. ' +
+      'Tracked, open jobs with a current profile and letter and PDFs on disk; jobs carrying an applyNote ' +
+      '(an earlier attempt hit a wall) are left out unless --retry. No LLM involved.',
+  )
+  .option('--retry', 'include jobs that carry an applyNote')
+  .option('-o, --out <path>', 'override pipeline.applyQueuePath')
+  .action(async (opts) => {
+    const g = program.opts();
+    const cfg = await loadConfig(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+
+    // Zero-LLM, zero-browser pre-pass: a job already known to be
+    // applyMethod 'external' is never going to appear in the apply queue,
+    // so record that now (same applyNote the apply skill would otherwise
+    // have spent a browser visit discovering) rather than let it reach the
+    // apply skill at all. Skips jobs that already carry a note (already
+    // handled, one way or another) or aren't tracked to a platform.
+    let autoExternal = 0;
+    for (const job of dedupeById(rt.store.all())) {
+      if (job.applyMethod !== 'external' || job.applyNote) continue;
+      if (!platformOf(job.url)) continue;
+      rt.store.setApplyNote(job.id, 'External apply only');
+      autoExternal++;
+    }
+    if (autoExternal > 0) await rt.store.save();
+
+    const outRoot = process.env.SCRAPER_DOCS_OUTPUT_DIR || cfg.pipeline.documentsOutputDir;
+    const batch = await findActiveBatch(outRoot);
+    const outBase = batch ? join(outRoot, batch) : outRoot;
+    const rootWindows = batch ? batchRootWindows(cfg.pipeline.documentsOutputDir, batch) : cfg.pipeline.documentsOutputDir;
+    const index = await readIndex(outBase, rootWindows);
+    const queue = buildApplyQueue(dedupeById(rt.store.all()), index, {
+      retry: Boolean(opts.retry),
+      fileExists: (folder, file) => existsSync(join(outBase, folder, file)),
+    });
+
+    const outPath = resolve(opts.out ?? cfg.pipeline.applyQueuePath);
+    await mkdir(dirname(outPath), { recursive: true });
+    await writeFile(outPath, JSON.stringify(queue, null, 2), 'utf8');
+    rt.logger.info(
+      `Apply queue: ${queue.counts.linkedin} LinkedIn, ${queue.counts.seek} SEEK written to ${outPath}` +
+        (autoExternal > 0 ? `; ${autoExternal} skipped as external-apply-only (auto-detected, no browser visit needed)` : '') +
+        (queue.missingDocuments > 0
+          ? `; ${queue.missingDocuments} more are ready but have no PDFs yet (run generate-documents).`
+          : '.'),
+    );
   });
 
 program
@@ -589,96 +993,124 @@ program
     'Deterministic, no-LLM sync: appends fit_good jobs to the Google Sheet tracker ' +
       '(deduped by Job ID, header row created on first use) and advances each ' +
       'successfully-synced job to pipelineStatus "tracked" so it is never re-sent. ' +
-      'Defaults to reading pipeline.trackerInboxPath (export-tracker-inbox\'s output). ' +
-      'Pass --intl to sync the international file/sheet instead.',
+      'By default syncs both the AU sheet (pipeline.trackerInboxPath) and the ' +
+      'international one (pipeline.trackerInboxIntlPath). Pass --intl to sync only ' +
+      'the international file/sheet.',
   )
-  .option('--intl', 'sync pipeline.trackerInboxIntlPath into pipeline.sheetsIntl instead of the AU pair')
+  .option('--intl', 'sync only pipeline.trackerInboxIntlPath into pipeline.sheetsIntl (skip the AU pair)')
   .action(async (file: string | undefined, opts) => {
     const g = program.opts();
     const cfg = await loadConfig(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
 
-    const sheetsKey = opts.intl ? 'sheetsIntl' : 'sheets';
-    const sheetsCfg = cfg.pipeline[sheetsKey];
-    if (!sheetsCfg.spreadsheetId) {
-      rt.logger.error(`pipeline.${sheetsKey}.spreadsheetId is not set in config.json. See docs/google-sheets-setup.md.`);
-      process.exitCode = 2;
-      return;
-    }
+    const syncOne = async (sheetsKey: 'sheets' | 'sheetsIntl', fileOverride?: string) => {
+      const sheetsCfg = cfg.pipeline[sheetsKey];
+      if (!sheetsCfg.spreadsheetId) {
+        rt.logger.error(`pipeline.${sheetsKey}.spreadsheetId is not set in config.json. See docs/google-sheets-setup.md.`);
+        process.exitCode = 2;
+        return;
+      }
 
-    const inboxPath = resolve(
-      file ?? (opts.intl ? cfg.pipeline.trackerInboxIntlPath : cfg.pipeline.trackerInboxPath),
-    );
-    let jobs: CleanJob[];
-    try {
-      jobs = JSON.parse(await readFile(inboxPath, 'utf8')) as CleanJob[];
-    } catch (err) {
-      rt.logger.error(`Could not read ${inboxPath}. Run export-tracker-inbox first.`, String(err));
-      process.exitCode = 2;
-      return;
-    }
+      const inboxPath = resolve(
+        fileOverride ?? (sheetsKey === 'sheetsIntl' ? cfg.pipeline.trackerInboxIntlPath : cfg.pipeline.trackerInboxPath),
+      );
+      let jobs: CleanJob[];
+      try {
+        jobs = JSON.parse(await readFile(inboxPath, 'utf8')) as CleanJob[];
+      } catch (err) {
+        rt.logger.error(`Could not read ${inboxPath}. Run export-tracker-inbox first.`, String(err));
+        process.exitCode = 2;
+        return;
+      }
 
-    const auth = await getAuthorizedClient(sheetsCfg);
-    await rt.store.load();
+      const auth = await getAuthorizedClient(sheetsCfg);
+      await rt.store.load();
 
-    let tracked = 0;
-    const skipped: Array<{ id: string; reason: string }> = [];
+      let tracked = 0;
+      const skipped: Array<{ id: string; reason: string }> = [];
 
-    if (jobs.length === 0) {
-      rt.logger.info(`No jobs in ${inboxPath} to append.`);
+      if (jobs.length === 0) {
+        rt.logger.info(`[${sheetsKey}] No jobs in ${inboxPath} to append.`);
+      } else {
+        const result = await syncJobsToSheet(auth, sheetsCfg, jobs);
+        for (const id of [...result.appended, ...result.alreadyPresent]) {
+          const res = rt.store.updateStatus(id, 'tracked', { actor: 'sheet-sync' });
+          if (res.ok) tracked++;
+          else if (res.reason !== 'already tracked') skipped.push({ id, reason: res.reason });
+        }
+        rt.logger.info(
+          `[${sheetsKey}] Sheet sync: ${result.appended.length} new row(s) added, ${result.alreadyPresent.length} already present. ` +
+            `${tracked} job(s) marked tracked.`,
+        );
+        if (skipped.length > 0) {
+          rt.logger.warn(`${skipped.length} job(s) synced to the sheet but could not be marked tracked:`);
+          for (const s of skipped.slice(0, 20)) rt.logger.warn(`  ${s.id}: ${s.reason}`);
+        }
+      }
+
+      // Always reconcile every editable column, regardless of whether there
+      // was anything new to append above — this is what pushes a freshly-
+      // generated career profile/cover letter into the sheet, pulls back
+      // anything Anshu typed into the sheet by hand so jobs.json agrees and
+      // the relevant export-*-inbox command leaves that job alone from now
+      // on, and pulls back the Applied checkbox and Stages dropdown so no
+      // agent is sent a job he's already recorded an outcome for.
+      const jobsById = new Map(dedupeById(rt.store.all()).map((j) => [j.id, j]));
+      const reconciled = await reconcileSheetColumns(auth, sheetsCfg, jobsById);
+      // A text Anshu typed into the Sheet is his: stamp it as current for the
+      // job's resume version so it is never re-queued as "drifted".
+      for (const p of reconciled.profilePulledBack) {
+        const j = jobsById.get(p.id);
+        rt.store.setProfile(p.id, { careerProfile: p.careerProfile, version: j ? pickResumeVersion(j) : 'software-engineer' });
+      }
+      for (const c of reconciled.coverLetterPulledBack) {
+        const j = jobsById.get(c.id);
+        rt.store.setCoverLetter(c.id, { coverLetter: c.coverLetter, version: j ? pickResumeVersion(j) : 'software-engineer' });
+      }
+      // Runs after the pull-backs above so the snapshot always wins with what the cell really holds.
+      for (const snap of reconciled.snapshots) rt.store.setSheetSnapshot(snap.id, snap);
+      for (const id of reconciled.markedApplied) {
+        rt.store.updateStatus(id, 'applied', { actor: 'sheet-sync' });
+      }
+      for (const stage of reconciled.interviewStages) {
+        rt.store.setInterviewStage(stage.id, stage.stage);
+      }
+      await rt.store.save();
+
+      if (reconciled.appliedPushError) {
+        rt.logger.warn(
+          `[${sheetsKey}] Could not tick the Applied checkbox for ${reconciled.appliedPushed.length || 'some'} job(s) ` +
+            `applied by the apply skills: ${reconciled.appliedPushError}. They are still recorded as applied in jobs.json.`,
+        );
+      } else if (reconciled.appliedPushed.length > 0) {
+        rt.logger.info(`[${sheetsKey}] Ticked Applied for ${reconciled.appliedPushed.length} job(s) applied by the apply skills.`);
+      }
+
+      const reconcileTotal =
+        reconciled.appliedPushed.length +
+        reconciled.profilePulledBack.length +
+        reconciled.coverLetterPulledBack.length +
+        reconciled.markedApplied.length +
+        reconciled.interviewStages.length +
+        reconciled.pushed.length;
+      if (reconcileTotal > 0) {
+        rt.logger.info(
+          `[${sheetsKey}] Sheet reconcile: ${reconciled.pushed.length} cell(s) pushed, ` +
+            `${reconciled.profilePulledBack.length} profile edit(s) and ${reconciled.coverLetterPulledBack.length} ` +
+            `cover-letter edit(s) pulled back, ${reconciled.markedApplied.length} job(s) marked applied, ` +
+            `${reconciled.interviewStages.length} interview stage(s) recorded.`,
+        );
+      }
+    };
+
+    if (opts.intl) {
+      await syncOne('sheetsIntl', file);
+    } else if (file) {
+      // An explicit file override only makes sense against one sheet.
+      await syncOne('sheets', file);
     } else {
-      const result = await syncJobsToSheet(auth, sheetsCfg, jobs);
-      for (const id of [...result.appended, ...result.alreadyPresent]) {
-        const res = rt.store.updateStatus(id, 'tracked', { actor: 'sheet-sync' });
-        if (res.ok) tracked++;
-        else if (res.reason !== 'already tracked') skipped.push({ id, reason: res.reason });
-      }
-      rt.logger.info(
-        `Sheet sync: ${result.appended.length} new row(s) added, ${result.alreadyPresent.length} already present. ` +
-          `${tracked} job(s) marked tracked.`,
-      );
-      if (skipped.length > 0) {
-        rt.logger.warn(`${skipped.length} job(s) synced to the sheet but could not be marked tracked:`);
-        for (const s of skipped.slice(0, 20)) rt.logger.warn(`  ${s.id}: ${s.reason}`);
-      }
-    }
-
-    // Always reconcile every editable column, regardless of whether there
-    // was anything new to append above — this is what pushes a freshly-
-    // generated career profile/cover letter into the sheet, pulls back
-    // anything Anshu typed into the sheet by hand so jobs.json agrees and
-    // the relevant export-*-inbox command leaves that job alone from now
-    // on, and pulls back the Applied checkbox and Stages dropdown so no
-    // agent is sent a job he's already recorded an outcome for.
-    const jobsById = new Map(dedupeById(rt.store.all()).map((j) => [j.id, j]));
-    const reconciled = await reconcileSheetColumns(auth, sheetsCfg, jobsById);
-    for (const p of reconciled.profilePulledBack) {
-      rt.store.setProfile(p.id, { careerProfile: p.careerProfile, technicalSkills: p.technicalSkills });
-    }
-    for (const c of reconciled.coverLetterPulledBack) {
-      rt.store.setCoverLetter(c.id, { coverLetter: c.coverLetter });
-    }
-    for (const id of reconciled.markedApplied) {
-      rt.store.updateStatus(id, 'applied', { actor: 'sheet-sync' });
-    }
-    for (const stage of reconciled.interviewStages) {
-      rt.store.setInterviewStage(stage.id, stage.stage);
-    }
-    await rt.store.save();
-
-    const reconcileTotal =
-      reconciled.profilePulledBack.length +
-      reconciled.coverLetterPulledBack.length +
-      reconciled.markedApplied.length +
-      reconciled.interviewStages.length +
-      reconciled.pushed.length;
-    if (reconcileTotal > 0) {
-      rt.logger.info(
-        `Sheet reconcile: ${reconciled.pushed.length} cell(s) pushed, ` +
-          `${reconciled.profilePulledBack.length} profile edit(s) and ${reconciled.coverLetterPulledBack.length} ` +
-          `cover-letter edit(s) pulled back, ${reconciled.markedApplied.length} job(s) marked applied, ` +
-          `${reconciled.interviewStages.length} interview stage(s) recorded.`,
-      );
+      await syncOne('sheets');
+      await syncOne('sheetsIntl');
     }
   });
 
@@ -687,36 +1119,44 @@ program
   .description(
     'Rotate the tracker onto a fresh tab (duplicates the current tab, keeping its Table/dropdown/' +
       'formatting setup, clears its data rows, and points config.json\'s pipeline.sheets.sheetName ' +
-      '(or pipeline.sheetsIntl.sheetName with --intl) at the new tab). Run this by hand whenever the ' +
-      'current tab gets too big to work with.',
+      'at the new tab). By default rotates both the AU and international tracker tabs. Pass --intl ' +
+      'to rotate only the international one (pipeline.sheetsIntl.sheetName).',
   )
-  .option('--intl', 'rotate the international tracker sheet instead of the AU one')
+  .option('--intl', 'rotate only the international tracker sheet (skip the AU one)')
   .action(async (opts) => {
     const g = program.opts();
     const configPath = resolve(g.config);
     const cfg = await loadConfig(configPath);
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
 
-    const sheetsKey = opts.intl ? 'sheetsIntl' : 'sheets';
-    const sheetsCfg = cfg.pipeline[sheetsKey];
-    if (!sheetsCfg.spreadsheetId) {
-      rt.logger.error(`pipeline.${sheetsKey}.spreadsheetId is not set in config.json. See docs/google-sheets-setup.md.`);
-      process.exitCode = 2;
-      return;
-    }
+    const rotateOne = async (sheetsKey: 'sheets' | 'sheetsIntl') => {
+      const sheetsCfg = cfg.pipeline[sheetsKey];
+      if (!sheetsCfg.spreadsheetId) {
+        rt.logger.error(`pipeline.${sheetsKey}.spreadsheetId is not set in config.json. See docs/google-sheets-setup.md.`);
+        process.exitCode = 2;
+        return;
+      }
 
-    const auth = await getAuthorizedClient(sheetsCfg);
-    const { oldTab, newTab } = await startNewTrackerTab(auth, sheetsCfg);
+      const auth = await getAuthorizedClient(sheetsCfg);
+      const { oldTab, newTab } = await startNewTrackerTab(auth, sheetsCfg);
 
-    const rawConfig = JSON.parse(await readFile(configPath, 'utf8')) as {
-      pipeline: { sheets: { sheetName: string }; sheetsIntl: { sheetName: string } };
+      const rawConfig = JSON.parse(await readFile(configPath, 'utf8')) as {
+        pipeline: { sheets: { sheetName: string }; sheetsIntl: { sheetName: string } };
+      };
+      rawConfig.pipeline[sheetsKey].sheetName = newTab;
+      await writeFile(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`, 'utf8');
+
+      rt.logger.info(
+        `Created tab "${newTab}" from "${oldTab}" and updated config.json (pipeline.${sheetsKey}) to use it from now on.`,
+      );
     };
-    rawConfig.pipeline[sheetsKey].sheetName = newTab;
-    await writeFile(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`, 'utf8');
 
-    rt.logger.info(
-      `Created tab "${newTab}" from "${oldTab}" and updated config.json (pipeline.${sheetsKey}) to use it from now on.`,
-    );
+    if (opts.intl) {
+      await rotateOne('sheetsIntl');
+    } else {
+      await rotateOne('sheets');
+      await rotateOne('sheetsIntl');
+    }
   });
 
 /* -------------------------------------------------------------------- replay */
@@ -824,6 +1264,8 @@ program.parseAsync(process.argv).catch((err) => {
 });
 
 /* --------------------------------------------------------------- plumbing */
+
+type Runtime = ReturnType<typeof makeRuntime>;
 
 function makeRuntime(cfg: Config, level: LogLevel) {
   const logger = new Logger({ level, file: join(cfg.dataDir, 'logs', 'scraper.log') });

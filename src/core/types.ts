@@ -3,7 +3,27 @@
  * so adding a new job board never touches the pipeline, store or CLI.
  */
 
+import type { ResumeVersion } from './resume-version.js';
+
 export type SourceName = string;
+
+/**
+ * How a listing is applied to, when a source can tell us without an
+ * authenticated request:
+ *  - 'quick_apply' — Seek's own in-site apply flow (Seek calls this "Quick
+ *    apply" in the UI; its page state calls it `isLinkOut: false`).
+ *  - 'external'    — applying redirects off-platform to the employer's own
+ *    site (Seek: `isLinkOut: true`; LinkedIn guest detail:
+ *    `public_jobs_apply-link-offsite`).
+ *  - 'easy_apply'  — LinkedIn's own in-site apply flow ("Easy Apply"). The
+ *    guest detail endpoint's apply button carries
+ *    `data-tracking-control-name="public_jobs_apply-link-onsite"` (or
+ *    `-simple`) for these; confirmed 2026-09-24 against 20 live listings,
+ *    all 10 returned by the `f_AL=true` (Easy Apply) search filter were
+ *    onsite/simple. The apply skill's `set-apply-method` still overrides.
+ * Undefined means not yet known; the apply skill still has to check.
+ */
+export type ApplyMethod = 'quick_apply' | 'easy_apply' | 'external';
 
 /** What an adapter emits. Source-shaped strings, minimal interpretation. */
 export interface RawJob {
@@ -29,6 +49,8 @@ export interface RawJob {
   category?: string;
   /** Source says this is remote / hybrid. */
   remoteHint?: boolean;
+  /** See ApplyMethod. Only ever set by an adapter that can tell for free from the detail page it already fetched (Seek, LinkedIn); left undefined otherwise. */
+  applyMethod?: ApplyMethod;
   /** Untouched payload, kept so normalization can be redone without re-scraping. */
   raw: unknown;
 }
@@ -151,7 +173,6 @@ export interface Job {
    * a job alone — there's no separate "done" status to track.
    */
   careerProfile?: string;
-  technicalSkills?: string[];
   /**
    * Set when the career-profile stage couldn't produce careerProfile for
    * this job yet: an unresolved clarifying question, or a disqualifying
@@ -177,6 +198,34 @@ export interface Job {
   /** Same idea as profileNote, but for an unresolved cover-letter question. */
   coverLetterNote?: string;
   /**
+   * Which base resume (see resume-version.ts) careerProfile / coverLetter
+   * were written from. Stamped by apply-career-profiles / apply-cover-letters
+   * / apply-materials, which refuse a write whose version disagrees with
+   * classifyResumeVersion(job). An unstamped value predates stamping and
+   * counts as LEGACY_RESUME_VERSION. When the stamp no longer matches the
+   * job's current classification the text is "drifted": selectForStage
+   * re-queues it and the documents stage refuses to build with it, so a
+   * profile written for the wrong resume can never reach a PDF.
+   */
+  careerProfileVersion?: ResumeVersion;
+  coverLetterVersion?: ResumeVersion;
+  /**
+   * Last text known to be in the Sheet's Career Profile / Cover Letter cell
+   * for this job. Lets reconcileSheetColumns tell "Anshu edited the cell"
+   * (sheet differs from this snapshot: pull it back) apart from "jobs.json
+   * was regenerated and the cell is stale" (sheet equals this snapshot:
+   * push the new text). Without it a regenerated profile is overwritten by
+   * the old cell on the very next sync.
+   */
+  sheetCareerProfile?: string;
+  sheetCoverLetter?: string;
+  /**
+   * Free-text note from the apply skills ("Applied by llm", or the exact
+   * unanswered screening question). Shown in the Sheet's Notes column when
+   * no profile/cover-letter note is pending.
+   */
+  applyNote?: string;
+  /**
    * Anshu's own manual application-outcome tracking column in the Sheet
    * (Take home / Initial Screen / Final Round / Offer / NA / Invalid, or
    * anything else he types there) — pulled back by sync-sheet, never
@@ -186,6 +235,13 @@ export interface Job {
    * pipelineStatus that job happens to still be sitting at.
    */
   interviewStage?: string;
+
+  /**
+   * See ApplyMethod. Set at scrape time from the detail page (Seek's
+   * `isLinkOut`, LinkedIn's guest apply-button tracking name); the apply
+   * skill's `set-apply-method` can still correct it live.
+   */
+  applyMethod?: ApplyMethod;
 
   raw: Record<SourceName, unknown>;
 }
