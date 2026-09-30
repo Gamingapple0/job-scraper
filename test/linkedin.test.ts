@@ -7,6 +7,7 @@ import {
   extractJobCards,
   extractDescriptionHtml,
   extractJobCriteria,
+  extractLinkedInApplyMethod,
 } from '../src/adapters/linkedin.js';
 import { toJob } from '../src/core/normalize.js';
 import type { AdapterContext, RawJob, RunOptions, SearchQuery } from '../src/core/types.js';
@@ -341,5 +342,17 @@ describe('linkedin adapter fetchDetail', () => {
     const adapter = createLinkedInAdapter(ctxWithPage('<html><body>Please enable JavaScript</body></html>'));
     const out = await adapter.fetchDetail!({ sourceId: '9', url: 'x', title: 't', company: 'c', locationRaw: '', raw: {} });
     expect(out.description).toBeUndefined();
+  });
+});
+
+describe('extractLinkedInApplyMethod', () => {
+  const btn = (name: string) => `<button class="apply-button" data-tracking-control-name="public_jobs_apply-link-${name}">`;
+  it('onsite and simple are Easy Apply, offsite is external', () => {
+    expect(extractLinkedInApplyMethod(btn('onsite'))).toBe('easy_apply');
+    expect(extractLinkedInApplyMethod(btn('simple'))).toBe('easy_apply');
+    expect(extractLinkedInApplyMethod(btn('offsite'))).toBe('external');
+  });
+  it('no apply button (closed listing) stays unknown', () => {
+    expect(extractLinkedInApplyMethod('<div>No longer accepting applications</div>')).toBeUndefined();
   });
 });

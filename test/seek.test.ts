@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   createSeekAdapter,
+  extractApplyMethod,
   extractJobPostingLd,
   extractNextDataDescription,
   extractJobAdHtml,
@@ -257,6 +258,36 @@ describe('seek adapter fetchDetail', () => {
     const adapter = createSeekAdapter(ctxWithPage('<html><body>Please enable JavaScript</body></html>'));
     const out = await adapter.fetchDetail!({ sourceId: '9', url: 'x', title: 't', company: 'c', locationRaw: '', raw: {} });
     expect(out.description).toBeUndefined();
+  });
+
+  it('sets applyMethod from the same page it already fetched for the description', async () => {
+    const html = `<script>window.__x = {"isLinkOut":false,"other":"stuff"}</script>`;
+    const adapter = createSeekAdapter(ctxWithPage(html));
+    const out = await adapter.fetchDetail!({ sourceId: '1', url: 'x', title: 't', company: 'c', locationRaw: '', raw: {} });
+    expect(out.applyMethod).toBe('quick_apply');
+  });
+});
+
+describe('extractApplyMethod', () => {
+  // Confirmed against three live Seek listings on 2026-09-20: two
+  // `isLinkOut: true` jobs that redirected to the employer's own site in a
+  // real browser, one `isLinkOut: false` job whose apply button read
+  // "Quick apply" — see the comment on the function itself.
+  it('reads isLinkOut: false as quick_apply', () => {
+    expect(extractApplyMethod('..."isLinkOut":false,"id":"1"...')).toBe('quick_apply');
+  });
+
+  it('reads isLinkOut: true as external', () => {
+    expect(extractApplyMethod('..."isLinkOut":true,"id":"1"...')).toBe('external');
+  });
+
+  it('tolerates the whitespace variants a minifier or a pretty-printer would produce', () => {
+    expect(extractApplyMethod('"isLinkOut" : false')).toBe('quick_apply');
+    expect(extractApplyMethod('"isLinkOut":  true')).toBe('external');
+  });
+
+  it('returns undefined when the field is absent', () => {
+    expect(extractApplyMethod('<html>no such field here</html>')).toBeUndefined();
   });
 });
 

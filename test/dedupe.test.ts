@@ -110,6 +110,23 @@ describe('JsonStore.upsert', () => {
     expect(res.job.description).toContain('longer description');
   });
 
+  it('takes the freshest applyMethod on a re-scrape (Seek can tell every time)', async () => {
+    const s = await store();
+    s.upsert(toJob(raw({ applyMethod: 'external' }), 'seek', 'swe'));
+    const res = s.upsert(toJob(raw({ applyMethod: 'quick_apply' }), 'seek', 'swe'));
+    expect(res.job.applyMethod).toBe('quick_apply');
+  });
+
+  it('keeps the stored applyMethod when a re-scrape has none to offer (LinkedIn, which the scraper never tags)', async () => {
+    const s = await store();
+    s.upsert(toJob(raw({ applyMethod: 'easy_apply' }), 'linkedin', 'swe'));
+    // A later re-scrape of the same posting carries no applyMethod at all —
+    // the LinkedIn adapter never sets one — so the value the apply skill
+    // recorded earlier via set-apply-method must survive, not get wiped.
+    const res = s.upsert(toJob(raw(), 'linkedin', 'swe'));
+    expect(res.job.applyMethod).toBe('easy_apply');
+  });
+
   it('ages out jobs that stop appearing', async () => {
     const s = await store();
     const job = s.upsert(toJob(raw(), 'seek', 'swe')).job;

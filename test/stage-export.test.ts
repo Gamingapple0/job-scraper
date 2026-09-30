@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { selectForStage, toCleanJob, toCoverLetterJob } from '../src/core/stage-export.js';
+import { selectForStage, toCleanJob, toCoverLetterJob, toDocumentJob, relocationNote } from '../src/core/stage-export.js';
 import { toJob } from '../src/core/normalize.js';
 import { advanceStatus } from '../src/core/pipeline-status.js';
 import type { Job, RawJob } from '../src/core/types.js';
@@ -121,6 +121,63 @@ describe('selectForStage: cover-letter', () => {
 
     const selected = selectForStage([noProfile, withProfile, alreadyDrafted], 'cover-letter', { now: NOW });
     expect(selected.map((j) => j.sourceId)).toEqual(['b']);
+  });
+});
+
+describe('selectForStage: documents', () => {
+  it('includes only tracked jobs that have both a career profile and a cover letter', () => {
+    const neither = withStatus(withStatus(makeJob({ sourceId: 'a' }), 'fit_good'), 'tracked');
+    const profileOnly = { ...withStatus(withStatus(makeJob({ sourceId: 'b' }), 'fit_good'), 'tracked'), careerProfile: 'blurb' };
+    const both = {
+      ...withStatus(withStatus(makeJob({ sourceId: 'c' }), 'fit_good'), 'tracked'),
+      careerProfile: 'blurb',
+      coverLetter: 'dear hiring manager...',
+    };
+
+    const selected = selectForStage([neither, profileOnly, both], 'documents', { now: NOW });
+    expect(selected.map((j) => j.sourceId)).toEqual(['c']);
+  });
+
+  it('excludes an applied job even with both fields set (regenerating an already-applied job is pointless)', () => {
+    const applied = {
+      ...withStatus(withStatus(withStatus(makeJob(), 'fit_good'), 'tracked'), 'applied'),
+      careerProfile: 'blurb',
+      coverLetter: 'dear hiring manager...',
+    };
+    expect(selectForStage([applied], 'documents', { now: NOW })).toHaveLength(0);
+  });
+});
+
+describe('relocationNote', () => {
+  it('is null for a Melbourne, VIC job (home base)', () => {
+    expect(relocationNote(makeJob({ locationRaw: 'Melbourne VIC' }))).toBeNull();
+  });
+
+  it('is the state abbreviation for another AU state', () => {
+    expect(relocationNote(makeJob({ locationRaw: 'Sydney NSW' }))).toBe('Open to relocation to NSW');
+    expect(relocationNote(makeJob({ locationRaw: 'Perth WA' }))).toBe('Open to relocation to WA');
+  });
+
+  it('is null for an AU job with no specific state (e.g. AU-wide remote)', () => {
+    expect(relocationNote(makeJob({ locationRaw: 'Australia' }))).toBeNull();
+  });
+
+  it('is the full country name outside Australia', () => {
+    expect(relocationNote(makeJob({ locationRaw: 'Dublin, County Dublin, Ireland' }))).toBe(
+      'Open to relocation to Ireland',
+    );
+    expect(relocationNote(makeJob({ locationRaw: 'Auckland, Auckland, New Zealand' }))).toBe(
+      'Open to relocation to New Zealand',
+    );
+  });
+});
+
+describe('toDocumentJob', () => {
+  it('flags isInternational true for a non-AU job, false for an AU one', () => {
+    const au = toDocumentJob(makeJob({ locationRaw: 'Sydney NSW' }));
+    const intl = toDocumentJob(makeJob({ locationRaw: 'Dublin, County Dublin, Ireland' }));
+    expect(au.isInternational).toBe(false);
+    expect(intl.isInternational).toBe(true);
   });
 });
 
