@@ -16,3 +16,10 @@ _to_delete/
 
 # Real config values (spreadsheet IDs, etc.) — see config.local.json.example
 config/config.local.json
+
+# Christmas casual variant: real sheet id
+config/christmas.local.json
+
+# v2: personal-data backup
+archive/
+applications/

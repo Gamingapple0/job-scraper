@@ -423,6 +423,45 @@ job's `applyMethod` is `external`, `export-apply-queue` records the
 skill ever sees it — no LLM judgement and no browser navigation spent
 confirming what's already known.
 
+## Christmas casual variant (seasonal, Oct-Jan)
+
+A second, fully decoupled pipeline for Christmas casual retail, hospitality and warehouse
+jobs. Same code, different job type, selected by the config file:
+
+- `config/christmas.json` (`"profile": "christmas-casual"`, own `dataDir: ./data/christmas`,
+  Seek searches filtered to the Casual/Vacation work type) + `config/christmas.local.json`
+  (gitignored, the CC Tracker spreadsheet id).
+- `src/core/profile.ts`: `PipelineProfile` is the main tracker's job-type rules (which resume,
+  where it lives, what the tailored text must pass). `src/variants/christmas-casual.ts`
+  subclasses it and overrides only what differs: one base resume, a `Skills` heading, shorter
+  profile/letter limits, a required availability statement, no international sheet.
+  `loadCfg()` in `cli.ts` activates the profile the config names.
+- Nothing is shared at runtime with the main tracker: own `jobs.json`, stage files, Google
+  Sheet, PDFs folder (`Resumes Gen Christmas`). `npm run run:all` never touches it and
+  `npm run xmas:run` never touches the main store.
+- Prompts: `Claude outputs/christmas/` (`run.md`, `fit-filter-framework.md`,
+  `materials-prompt.md`, `clarifications.md`, `resume-christmas-casual.md`).
+
+```powershell
+scripts\christmas-scrape.bat          # build + scrape + export-fit-inbox, natively (schedule daily)
+npm run xmas:run                      # scrape every christmas search
+npm run xmas -- export-fit-inbox      # any command: npm run xmas -- <command>
+node dist/cli.js -c config/christmas.json sync-sheet   # compiled form
+node scripts/christmas-setup-sheet.mjs                  # one-off: copy the tracker tab layout into CC Tracker
+```
+
+To remove after the season: delete `config/christmas*.json`, `src/variants/`,
+`test/christmas-casual.test.ts`, `data/christmas/`, `Claude outputs/christmas/`,
+`scripts/christmas-setup-sheet.mjs`, the `xmas*` npm scripts, and the `christmas-casual`
+entries in `PROFILES` (cli.ts) and `ResumeVersion`.
+
+## ATS rules for tailoring (both pipelines)
+
+The career profile's first sentence carries the posting's exact title (lint-enforced via
+`mentionsTitle` in `tailoring-lint.ts`), the resume name line carries it too
+(`headlineTitle` in `stage-export.ts`, `targetTitle` in the documents manifest), and the
+prompts require the JD's exact keyword strings, woven in without stuffing.
+
 ## Before you can run it
 
 Three things. The first is required, the second is the one that decides whether

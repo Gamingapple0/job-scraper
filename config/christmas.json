@@ -1,0 +1,249 @@
+{
+  "profile": "christmas-casual",
+  "dataDir": "./data/christmas",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "cache": {
+    "enabled": true,
+    "ttlMinutes": 360
+  },
+  "defaults": {
+    "maxPages": 5,
+    "maxAgeDays": 21,
+    "fetchDetail": true,
+    "closeAfterMissedRuns": 3,
+    "fuzzyDedupe": true,
+    "sanityFloorRatio": 0.2
+  },
+  "sources": {
+    "seek": {
+      "enabled": true,
+      "minDelayMs": 1800,
+      "jitterMs": 1600,
+      "maxRequestsPerRun": 100,
+      "searchEndpoint": "https://www.seek.com.au/api/jobsearch/v5/search",
+      "jobDetailUrl": "https://au.seek.com/job/{id}",
+      "siteKey": "AU-Main",
+      "sourcesystem": "houston",
+      "locale": "en-AU",
+      "pageSize": 22,
+      "sortMode": "ListedDate",
+      "extraParams": {
+        "worktype": "245"
+      }
+    },
+    "linkedin": {
+      "enabled": true,
+      "minDelayMs": 3000,
+      "jitterMs": 2000,
+      "maxRequestsPerRun": 100,
+      "searchEndpoint": "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search",
+      "detailEndpoint": "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{id}",
+      "publicJobUrl": "https://www.linkedin.com/jobs/view/{id}",
+      "pageSize": 25,
+      "timePosted": "r86400",
+      "maxStart": 1000,
+      "extraParams": {}
+    }
+  },
+  "searches": [
+    {
+      "label": "xmas-casual",
+      "query": "christmas casual",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 5,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-casual-linkedin",
+      "query": "christmas casual",
+      "location": "Melbourne, Victoria, Australia",
+      "sources": [
+        "linkedin"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-retail",
+      "query": "christmas casual retail",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 5,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-sales-assistant",
+      "query": "sales assistant",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-retail-assistant",
+      "query": "retail assistant",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-customer-service",
+      "query": "customer service casual",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-hospitality",
+      "query": "christmas casual hospitality",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-fnb",
+      "query": "food and beverage attendant",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-barista",
+      "query": "barista",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-kitchen-hand",
+      "query": "kitchen hand",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-events",
+      "query": "event staff",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-warehouse",
+      "query": "christmas casual warehouse",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-pick-pack",
+      "query": "pick packer",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-fulfilment",
+      "query": "online fulfilment",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-seasonal",
+      "query": "seasonal casual",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    },
+    {
+      "label": "xmas-gift-wrap",
+      "query": "gift wrapper",
+      "location": "All Melbourne VIC",
+      "sources": [
+        "seek"
+      ],
+      "maxPages": 3,
+      "maxAgeDays": 21,
+      "enabled": true
+    }
+  ],
+  "pipeline": {
+    "fitInboxPath": "./data/christmas/stage/fit-filter-inbox.json",
+    "trackerInboxPath": "./data/christmas/stage/tracker-inbox.json",
+    "trackerInboxIntlPath": "./data/christmas/stage/tracker-inbox-intl.json",
+    "profileInboxPath": "./data/christmas/stage/profile-inbox.json",
+    "coverLetterInboxPath": "./data/christmas/stage/cover-letter-inbox.json",
+    "materialsInboxPath": "./data/christmas/stage/materials-inbox.json",
+    "applyQueuePath": "./data/christmas/stage/apply-queue.json",
+    "documentsManifestPath": "./data/christmas/stage/documents-manifest.json",
+    "documentsOutputDir": "C:\\Users\\madhi\\OneDrive\\Documents\\Resumes Gen Christmas",
+    "documentsResumeDocs": {
+      "christmasCasual": "1Cj7C62VDG4pfC3WjYNnkao9Vv-BP5i9tylI-3rLxEDA"
+    },
+    "fitInboxMaxAgeDays": 21,
+    "sheets": {
+      "spreadsheetId": "",
+      "sheetName": "Tracker"
+    },
+    "sheetsIntl": {
+      "spreadsheetId": "",
+      "sheetName": "Tracker"
+    }
+  }
+}

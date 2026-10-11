@@ -24,12 +24,22 @@
     "sync-sheet": "tsx src/cli.ts sync-sheet",
     "new-tracker-tab": "tsx src/cli.ts new-tracker-tab",
     "sync-sheet-intl": "tsx src/cli.ts sync-sheet --intl",
-    "new-tracker-tab-intl": "tsx src/cli.ts new-tracker-tab --intl"
+    "new-tracker-tab-intl": "tsx src/cli.ts new-tracker-tab --intl",
+    "xmas": "tsx src/cli.ts --config ./config/christmas.json",
+    "xmas:run": "tsx src/cli.ts --config ./config/christmas.json run --all",
+    "xmas:export-fit-inbox": "tsx src/cli.ts --config ./config/christmas.json export-fit-inbox",
+    "xmas:export-tracker-inbox": "tsx src/cli.ts --config ./config/christmas.json export-tracker-inbox",
+    "xmas:sync-sheet": "tsx src/cli.ts --config ./config/christmas.json sync-sheet",
+    "xmas:export-materials-inbox": "tsx src/cli.ts --config ./config/christmas.json export-materials-inbox",
+    "xmas:generate-documents": "tsx src/cli.ts --config ./config/christmas.json generate-documents",
+    "xmas:export-apply-queue": "tsx src/cli.ts --config ./config/christmas.json export-apply-queue",
+    "xmas:stats": "tsx src/cli.ts --config ./config/christmas.json stats"
   },
   "dependencies": {
     "@googleapis/sheets": "^9.5.0",
     "commander": "^12.1.0",
     "google-auth-library": "^9.15.0",
+    "yaml": "^2.9.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

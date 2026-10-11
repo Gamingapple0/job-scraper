@@ -478,7 +478,7 @@
     "fitInboxMaxAgeDays": 14,
     "sheets": {
       "spreadsheetId": "",
-      "sheetName": "Tracker 2",
+      "sheetName": "Tracker 4",
       "oauthClientPath": "./config/google-oauth-client.json",
       "oauthTokenPath": "./config/google-oauth-token.json"
     },
@@ -492,7 +492,7 @@
     },
     "sheetsIntl": {
       "spreadsheetId": "",
-      "sheetName": "Tracker",
+      "sheetName": "Tracker 2",
       "oauthClientPath": "./config/google-oauth-client.json",
       "oauthTokenPath": "./config/google-oauth-token.json"
     }

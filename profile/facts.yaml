@@ -1,0 +1,209 @@
+# Fact ledger: the ONLY source of claims for v2 resumes, letters and outreach.
+# Confirmed by Anshu, 6 Oct 2026 (application-framework-v2.md section 3).
+# A new fact enters only when Anshu confirms it. Edit here, nowhere else.
+#
+# `facts` lines are what the validator matches numbers against: a number in a
+# document must appear in a fact line here, and the sentence carrying it must
+# share at least one content word with that fact line (so "48 hours" fails, and
+# "100+ automated tests" fails because 100 belongs to the PR-review fact).
+
+contact:
+  name: Anshu Madhikarmi
+  location: Melbourne, VIC
+  phone: "0406 973 781"
+  phone_intl: "+61 406 973 781"
+  email: madhikarmianshu@gmail.com
+  linkedin: linkedin.com/in/anshu-madhikarmi
+  website: anshumadhikarmi.netlify.app
+
+roles:
+  - id: jdr-swe
+    title: Full Stack Software Engineer
+    company: JDR Software
+    start: 07/2025
+    end: Present
+    bullets: { min: 6, max: 8 }
+    facts:
+      - Owns 3 core modules end-to-end across frontend, backend and database; practises DDD and TDD
+      - N+1 query fix with batched DB calls plus caching took a response from ~35s to under 1s, and 12ms on cache hits
+      - Traced a cross-system GraphQL data-contract issue with Splunk and shipped a hotfix within 24 hours of the report
+      - Fixed a React infinite re-render crash in a core shared table component with hash-based lookups plus memoisation
+      - Resolved 300+ dev tickets, lowest defect rate on the team per sprint reports
+      - 10-month multi-surface validation initiative across scheduling, imports and audit over three release cycles, with deferred work scoped into tracked follow-ups
+      - Built an AI-assisted PR review workflow with Claude Code that flags issues before human review, integrates the Atlassian MCP server, and prevented 100+ bugs from reaching production (measured)
+      - Spring Security work on authentication and validation logic in his modules
+      - Pre-merge workflow against the team's CI/CD
+      # Everyday work that the role implies (Anshu, 7 Oct 2026: "take reasonable liberty"):
+      - Modules run on Java and Spring Boot with PostgreSQL on the backend; React with TypeScript for new modules and JavaScript in legacy code
+      - As a full-stack engineer, designs tables and schema changes, writes SQL queries and database migrations for his modules
+      - Builds REST APIs and the front-end screens that use them, and writes unit tests for his own changes
+      - Authentication at JDR runs on Keycloak with JWT tokens
+      - Builds with Maven and Gradle
+      - JDR runs an in-house message broker with queues
+      - PostgreSQL database management at JDR
+
+  - id: jdr-qa
+    title: QA Test Analyst
+    company: JDR Software
+    start: 07/2024
+    end: 07/2025
+    bullets: { min: 3, max: 5 }
+    facts:
+      - Built a Playwright framework for a new product from zero coverage, architected the repo structure, and authored 60% of all tests since launch
+      - Wrote 200+ manual test cases and 150+ automated tests in WebdriverIO and Playwright, saving 50 hours of manual testing
+      - Found 400+ bugs across 3 SaaS products
+      - Built and used CI/CD pipelines in both Jenkins and Bamboo; Bamboo ran QA environment deployments, data resets and overnight regression runs of 2,000+ tests with results synced to TestRail
+      - JMeter load and volume testing, measured, validated 200,000 users and 500,000 bookings, then 1,000 bookings per second from 100 concurrent users
+      - Mentored junior engineers on automation and was the first point of contact for automation questions
+      - Jira and Confluence
+
+  - id: deakin-lab
+    title: Research Assistant / Mobile Application Developer
+    company: Deakin University IoT & SE Lab
+    start: 05/2024
+    end: 07/2024
+    bullets: { min: 1, max: 2 }
+    facts:
+      - Open-source Android prototype in Kotlin and Java integrating Federated Learning (Flower) and RF-sensing (ResNet) for privacy-preserving activity monitoring
+      - Co-authored a survey paper on humanitarian mobile apps, under peer review
+      - Analysed 10+ humanitarian platforms
+
+  - id: vosyn
+    title: Frontend Squad Lead
+    company: Vosyn AI
+    start: 02/2024
+    end: 04/2024
+    bullets: { min: 1, max: 2 }
+    facts:
+      - Promoted to lead; led 5 front-end developers and 1 UI/UX designer with 100% on-time delivery
+      - Owned core navigation components (sidebar, navbar, navigation) in both Next.js and Vue3 with TypeScript
+
+projects:
+  - id: job-pipeline
+    name: Job-Market Data Pipeline
+    stack: [TypeScript, Node.js, Google Sheets API, Vitest]
+    bullets: { min: 2, max: 4 }
+    facts:
+      - Multi-source ingestion with source adapters for Seek's search API and LinkedIn's public job endpoints behind a common interface, normalising listings across 8 countries into one schema
+      - Cross-source deduplication with merge rules that preserve the freshest values, plus country detection from location text, fixing a bug that had silently mis-routed every international listing
+      - Reverse-engineered each listing's application type from embedded page-state and tracking attributes, verified against live listings
+      - 200+ Vitest tests including recorded real API responses as regression fixtures; config-driven searches; scheduled runs syncing to Google Sheets through the Sheets API
+      - Seek detail pages returned 403 to non-browser requests while the search API did not; diagnosed with DevTools network capture, switched host and moved to extracting from server-rendered HTML
+      - Seek and LinkedIn do not share a location vocabulary below capital-city level
+
+education:
+  - id: bcs
+    degree: Bachelor of Computer Science
+    school: Deakin University, Burwood
+    start: 02/2023
+    end: 07/2025
+    degree_note: 88% WAM
+    display: "Minors: Cloud Technologies, Full Stack Development"
+    facts:
+      - 88% WAM, completed with Distinction on 3 Jul 2025
+      - Minors in Cloud Technologies and Full Stack Development
+      - Terraform covered in coursework
+  - id: diploma
+    degree: Diploma of IT
+    school: Deakin College
+    end: "2022"
+    display: WAM 89%.
+    facts:
+      - Diploma of IT 2022 with 89% WAM
+
+transcript:
+  - { code: SIT331, name: Secure Backend Services (C#/.NET), mark: 100 }
+  - { code: SIT232, name: Object-Oriented Development, mark: 100 }
+  - { code: SIT113, name: Cloud Computing & Virtualisation, mark: 97 }
+  - { code: SIT313, name: Secure Frontend, mark: 95 }
+  - { code: SIT221, name: Data Structures & Algorithms, mark: 93 }
+  - { code: SIT323, name: Cloud Native Application Development, mark: 93 }
+  - { code: SIT202, name: Computer Networks, mark: 93 }
+
+other:
+  facts:
+    - PTE 88
+    - 485 Temporary Graduate visa valid to Aug 2027 with full work rights
+    - Willing to relocate anywhere in Australia or overseas
+    - Uses Claude day to day for code review support and documentation
+
+# Confirmed in Claude outputs/tailoring-clarifications.md. University and personal work:
+# say so when used, never present as JDR production work.
+side:
+  facts:
+    - Node.js with Express in university and personal projects
+    - Firebase functions and other GCP serverless services in personal projects, and OAuth through Firebase Auth in many of them
+    - Firestore and MongoDB in university and personal projects
+    - Microservices (order, product and payment services) in university projects and freelance e-commerce work
+    - Terraform at a basic level in university
+    - Uses the Atlassian MCP server and other MCP servers; has not built one
+    - Vue3 and Next.js with TypeScript at Vosyn AI
+
+# Letters only, one short clause, only when the JD values Python. Never a resume role.
+letter_only:
+  - id: freelance
+    facts:
+      - Earlier freelance Python/Django work for 4 to 5 small clients over about a year, deployed to DigitalOcean, more than 4 years ago
+    tools: [Python, Django, DigitalOcean]
+    requires_jd: [python, django]
+
+screening:
+  right_to_work_au: "Yes"
+  sponsorship_now: "No"
+  sponsorship_future: "Yes"
+
+# Skills section placement, from Anshu's own 1-5 confidence ratings.
+#   core: any core row.   jd: core row only when the JD names it.
+#   exposure: only on the final "Additional exposure" row (or omit).
+skills:
+  core: [JavaScript, React, REST, Playwright, WebdriverIO, Jira, Agile, OOP]
+  jd: [TypeScript, Java, Python, Spring Boot, PostgreSQL, JUnit, Git]
+  exposure: [AWS, Docker, Kubernetes, C#, GraphQL, Next.js, Vue]
+  # Evidenced in the roles above but not rated by Anshu. Treated like `jd`
+  # (core row only when the JD asks). Unconfirmed placement: ask before promoting.
+  evidenced_jd: [Jenkins, Bamboo, JMeter, TestRail, Splunk, Confluence, Spring Security, CI/CD, SQL, Node.js, Vitest, Claude Code, DDD, TDD, Google Sheets API, Keycloak, JWT, Maven, Gradle, Express, Firebase, GCP, MongoDB, Firestore, OAuth, Microservices, MCP]
+  # Evidenced but thin (lab, coursework, letter-only). Exposure row at most.
+  evidenced_exposure: [Kotlin, Terraform, .NET, Android, Federated Learning]
+
+# A "jd" skill goes in a core row when the JD names it OR one of these
+# (the JD asks for the thing in general terms, e.g. "relational databases").
+jd_synonyms:
+  PostgreSQL: [relational database, relational databases, SQL, database design]
+  SQL: [relational database, relational databases, database]
+  Java: [backend, back-end, object-oriented, Spring]
+  Spring Boot: [Java, backend, back-end, Spring]
+  TypeScript: [JavaScript, front-end, frontend, React, web applications]
+  JUnit: [unit test, unit tests, unit testing, Java]
+  Git: [version control, version-control]
+  CI/CD: [pipeline, pipelines, continuous integration, deployment]
+  Jenkins: [CI/CD, pipeline, pipelines]
+  Bamboo: [CI/CD, pipeline, pipelines]
+  JMeter: [load testing, performance testing, performance]
+  TestRail: [test management, quality assurance, QA]
+  Splunk: [observability, monitoring, logging, production issues]
+  Confluence: [documentation]
+  Spring Security: [authentication, security, access control]
+  Keycloak: [authentication, SSO, identity]
+  JWT: [authentication, OAuth, token]
+  OAuth: [authentication, SSO, OIDC]
+  Claude Code: [AI tools, AI-assisted, AI]
+  TDD: [unit test, unit tests, test-driven, well-tested]
+  DDD: [domain-driven, domain driven]
+  Maven: [build tools, Java]
+  Gradle: [build tools, Java]
+  Node.js: [backend, back-end, JavaScript]
+  Microservices: [microservice, distributed]
+
+aliases:
+  JavaScript: [JS]
+  TypeScript: [TS]
+  PostgreSQL: [Postgres]
+  REST: [REST APIs, RESTful]
+  OOP: [Object-Oriented Programming, object-oriented]
+  Vue: [Vue3, Vue.js]
+  Next.js: [NextJS]
+  CI/CD: [CI, continuous integration]
+  Node.js: [Node]
+  C#: [C#/.NET]
+  GraphQL: []
+  Claude Code: [Claude]
