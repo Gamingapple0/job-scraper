@@ -5,7 +5,8 @@ import type { Job, RawJob } from '../src/core/types.js';
 import type { ResumeVersion } from '../src/core/resume-version.js';
 
 const words = (n: number) => Array.from({ length: n }, (_, i) => `word${i % 9}`).join(' ');
-const profile = (company: string) => `Engineer aimed at what ${company} is hiring for. ${words(75)}.`;
+// Names every title the tests below use: the lint requires the posting's exact title.
+const profile = (company: string) => `Software Engineer, API Automation Tester and Backend Developer aimed at what ${company} is hiring for. ${words(75)}.`;
 const letter = (company: string) =>
   [`Opening line about ${company} and the role. ${words(55)}.`, `${words(90)}.`, `${words(80)}.`, `${words(35)}. Thank you.`].join('\n\n');
 

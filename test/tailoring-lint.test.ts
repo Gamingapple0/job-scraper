@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { lintCareerProfile, lintCoverLetter, wordCount } from '../src/core/tailoring-lint.js';
+import { lintCareerProfile, lintCoverLetter, titleCandidates, wordCount } from '../src/core/tailoring-lint.js';
 
 const words = (n: number, seed = 'word') => Array.from({ length: n }, (_, i) => `${seed}${i % 7}`).join(' ');
 
-const goodProfile = `Test analyst turned engineer targeting the API automation focus Synechron is hiring for. ${words(75)}.`;
+const goodProfile = `Test analyst turned engineer targeting the API Automation Tester role Synechron is hiring for. ${words(75)}.`;
 const goodLetter = [
   `Owning test automation from zero coverage is work I have already done, which is why Synechron's role fits. ${words(60)}.`,
   `${words(90)}.`,
@@ -33,6 +33,18 @@ describe('lintCareerProfile', () => {
   });
 });
 
+describe('exact job title (ATS)', () => {
+  it('requires the posting title or one of its clauses, verbatim', () => {
+    expect(lintCareerProfile(goodProfile, 'Synechron', 'API Automation Tester')).toEqual([]);
+    expect(lintCareerProfile(goodProfile, 'Synechron', 'Test Analyst - Payments (Contract)')).toEqual([]);
+    expect(lintCareerProfile(goodProfile, 'Synechron', 'QA Engineer').join()).toMatch(/exact job title/);
+  });
+
+  it('splits bracket noise and clauses off the title', () => {
+    expect(titleCandidates('Sales Assistant - Chadstone (Christmas Casual)')).toEqual(['Sales Assistant - Chadstone', 'Sales Assistant', 'Chadstone']);
+  });
+});
+
 describe('lintCoverLetter', () => {
   it('accepts a 4 paragraph letter of about 300 words that names the company', () => {
     expect(wordCount(goodLetter)).toBeGreaterThan(235);
@@ -50,5 +62,12 @@ describe('lintCoverLetter', () => {
   it('flags a letter that is far too short or has no paragraph breaks', () => {
     expect(lintCoverLetter('Synechron is great. '.repeat(10), 'Synechron').join()).toMatch(/words/);
     expect(lintCoverLetter(goodLetter.replace(/\n\n/g, ' '), 'Synechron').join()).toMatch(/paragraph/);
+  });
+});
+
+describe('framework v2: no exact-title rule on the main tracker', () => {
+  it('main profile accepts a profile without the posting title; only titleHeadline profiles require it', async () => {
+    const { PipelineProfile } = await import('../src/core/profile.js');
+    expect(new PipelineProfile().lintProfile(goodProfile, { company: 'Synechron', title: 'QA Engineer' })).toEqual([]);
   });
 });

@@ -16,6 +16,7 @@ describe('sheetHeaders', () => {
       'Job ID', 'Title', 'Company', 'Location',
       'URL', 'Applied/Closed', 'Career Profile', 'Cover Letter', 'Fit Reason',
       'Date Added', 'Date Posted', 'Tags', 'Salary', 'Notes', 'Stages', 'Apply Method',
+      'Tier', 'Role Family', 'Archetype', 'Thesis', 'Applied Date', 'Letter Sent', 'Outreach Sent', 'Referral', 'Outcome',
     ]);
   });
 
@@ -32,8 +33,8 @@ describe('colIndex', () => {
     const au = colIndex(sheetHeaders(auCfg));
     expect(au.jobId).toBe(0);
     expect(au.country).toBe(-1); // no Country column on the AU layout
-    expect(au.stages).toBe(sheetHeaders(auCfg).length - 2);
-    expect(au.applyMethod).toBe(sheetHeaders(auCfg).length - 1); // always the last column
+    expect(au.stages).toBe(sheetHeaders(auCfg).indexOf('Apply Method') - 1);
+    expect(au.applyMethod).toBe(sheetHeaders(auCfg).indexOf('Apply Method'));
 
     const intl = colIndex(sheetHeaders(intlCfg));
     expect(intl.country).toBe(4);
@@ -76,7 +77,7 @@ describe('jobToRow', () => {
 
   it('labels the Apply Method column from applyMethod', () => {
     const headers = sheetHeaders(auCfg);
-    const last = (j: CleanJob) => jobToRow(j, '2026-09-18', headers)[headers.length - 1];
+    const last = (j: CleanJob) => jobToRow(j, '2026-09-18', headers)[headers.indexOf('Apply Method')];
     expect(last({ ...job, applyMethod: 'easy_apply' })).toBe('Easy Apply');
     expect(last({ ...job, applyMethod: 'quick_apply' })).toBe('Quick Apply');
     expect(last({ ...job, applyMethod: 'external' })).toBe('External');
@@ -113,5 +114,26 @@ describe('decideTextCell', () => {
 
   it('ignores surrounding whitespace', () => {
     expect(decideTextCell('profile ', ' profile', undefined)).toBe('none');
+  });
+});
+
+describe('framework v2 measurement columns', () => {
+  it('appends pushed then manual columns after Apply Method', async () => {
+    const { sheetHeaders } = await import('../src/core/google-sheets.js');
+    const h = sheetHeaders({ spreadsheetId: 'x', sheetName: 't', oauthClientPath: '', oauthTokenPath: '', includeCountry: true });
+    expect(h.slice(h.indexOf('Apply Method') + 1)).toEqual(['Tier', 'Role Family', 'Archetype', 'Thesis', 'Applied Date', 'Letter Sent', 'Outreach Sent', 'Referral', 'Outcome']);
+    expect(h.length).toBe(26);
+  });
+
+  it('fills from the sent application, else from the fit tier and the applied event', async () => {
+    const { measurementCells } = await import('../src/core/google-sheets.js');
+    const old = { pipelineStatus: 'applied', fitTier: 'skip', statusHistory: [{ to: 'applied', at: '2026-09-20T10:00:00Z' }] } as never;
+    expect(measurementCells(old)).toMatchObject({ Tier: 'Skip', 'Applied Date': '2026-09-20', 'Letter Sent': '' });
+    const sent = {
+      pipelineStatus: 'applied',
+      statusHistory: [],
+      application: { tier: 'A', family: 'C', archetype: 'quality-sdet', thesis: 't', letterSent: false, appliedAt: '2026-10-07', folder: 'f' },
+    } as never;
+    expect(measurementCells(sent)).toEqual({ Tier: 'A', 'Role Family': 'C', Archetype: 'quality-sdet', Thesis: 't', 'Applied Date': '2026-10-07', 'Letter Sent': 'N' });
   });
 });
