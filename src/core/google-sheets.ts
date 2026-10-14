@@ -48,7 +48,30 @@ export function sheetHeaders(cfg: SheetsConfig): string[] {
     'Notes',
     'Stages',
     'Apply Method',
+    ...MEASUREMENT_PUSHED,
+    ...MEASUREMENT_MANUAL,
   ];
+}
+
+/**
+ * Framework v2 measurement columns (section 11). The pushed ones are written
+ * from jobs.json on every sync (fit tier/family from the fit filter, the rest
+ * from app-sent); the manual ones belong to Anshu and are never written.
+ */
+export const MEASUREMENT_PUSHED = ['Tier', 'Role Family', 'Archetype', 'Thesis', 'Applied Date', 'Letter Sent'] as const;
+export const MEASUREMENT_MANUAL = ['Outreach Sent', 'Referral', 'Outcome'] as const;
+
+export function measurementCells(job: Job): Record<(typeof MEASUREMENT_PUSHED)[number], string> {
+  const a = job.application;
+  const appliedEvent = [...(job.statusHistory ?? [])].reverse().find((e) => e.to === 'applied');
+  return {
+    Tier: a?.tier ?? (job.fitTier === 'skip' ? 'Skip' : job.fitTier ?? ''),
+    'Role Family': a?.family ?? job.roleFamily ?? '',
+    Archetype: a?.archetype ?? '',
+    Thesis: a?.thesis ?? '',
+    'Applied Date': a?.appliedAt ?? (job.pipelineStatus === 'applied' && appliedEvent ? appliedEvent.at.slice(0, 10) : ''),
+    'Letter Sent': a ? (a.letterSent ? 'Y' : 'N') : '',
+  };
 }
 
 /** Anshu's own outcome-tracking dropdown for the Stages column. */
@@ -116,7 +139,9 @@ export function colIndex(headers: string[]): ColIndex {
 
 /** 0-indexed column number -> A1 letter (0 -> 'A', 11 -> 'L', ...). Only needs single-letter range in this sheet's size. */
 function columnLetter(index: number): string {
-  return String.fromCharCode('A'.charCodeAt(0) + index);
+  let out = '';
+  for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + ((n - 1) % 26)) + out;
+  return out;
 }
 
 /** Last column letter for the full-width A1 ranges below, derived from how many columns this layout has. */
@@ -471,15 +496,47 @@ export async function startNewTrackerTab(auth: OAuth2Client, cfg: SheetsConfig):
  *  synced without ever re-checking with an LLM. Call ensureSheetAndHeader
  *  first — this assumes the tab already exists. */
 async function getExistingIds(client: sheets_v4.Sheets, cfg: SheetsConfig): Promise<Set<string>> {
+  return (await readIdColumn(client, cfg)).ids;
+}
+
+/** Column A as written: the Job IDs, plus the first row after the last filled one. */
+async function readIdColumn(client: sheets_v4.Sheets, cfg: SheetsConfig): Promise<{ ids: Set<string>; nextRow: number }> {
   const colA = await client.spreadsheets.values.get({
     spreadsheetId: cfg.spreadsheetId,
     range: tabRange(cfg.sheetName, 'A:A'),
   });
   const rows = colA.data.values ?? [];
+  return { ids: idsFrom(rows), nextRow: rows.length + 1 };
+}
+
+function idsFrom(rows: unknown[][]): Set<string> {
   // Row 1 is the header (ensureSheetAndHeader guarantees it exists by now) —
   // every row after it starts with a Job ID.
   const ids = rows.slice(1).map((r) => String(r[0] ?? '')).filter(Boolean);
   return new Set(ids);
+}
+
+/**
+ * Grow the tab's Table (and grid) so rows written below it keep the typed
+ * columns (Applied checkbox, Stages dropdown, Date format).
+ */
+async function growTableTo(client: sheets_v4.Sheets, cfg: SheetsConfig, endRow: number): Promise<void> {
+  const meta = await client.spreadsheets.get({
+    spreadsheetId: cfg.spreadsheetId,
+    fields: 'sheets(properties(sheetId,title,gridProperties(rowCount)),tables(tableId,range))',
+  });
+  const sheet = (meta.data.sheets ?? []).find((x) => x.properties?.title === cfg.sheetName);
+  const sheetId = sheet?.properties?.sheetId;
+  if (sheetId == null) return;
+  const requests: sheets_v4.Schema$Request[] = [];
+  const rowCount = sheet?.properties?.gridProperties?.rowCount ?? 0;
+  if (rowCount < endRow) requests.push({ appendDimension: { sheetId, dimension: 'ROWS', length: endRow - rowCount } });
+  for (const t of sheet?.tables ?? []) {
+    if (t.range && (t.range.startColumnIndex ?? 0) === 0 && (t.range.endRowIndex ?? 0) < endRow) {
+      requests.push({ updateTable: { table: { tableId: t.tableId, range: { ...t.range, sheetId, endRowIndex: endRow } }, fields: 'range' } });
+    }
+  }
+  if (requests.length) await client.spreadsheets.batchUpdate({ spreadsheetId: cfg.spreadsheetId, requestBody: { requests } });
 }
 
 export function jobToRow(job: CleanJob, dateAdded: string, headers: string[]): (string | number)[] {
@@ -520,18 +577,22 @@ export interface SyncResult {
 export async function syncJobsToSheet(auth: OAuth2Client, cfg: SheetsConfig, jobs: CleanJob[]): Promise<SyncResult> {
   const client = sheetsClient(auth);
   const headers = await ensureSheetAndHeader(client, cfg);
-  const existingIds = await getExistingIds(client, cfg);
+  const { ids: existingIds, nextRow } = await readIdColumn(client, cfg);
 
   const toAppend = jobs.filter((j) => !existingIds.has(j.id));
   const alreadyPresent = jobs.filter((j) => existingIds.has(j.id)).map((j) => j.id);
 
   if (toAppend.length > 0) {
     const now = new Date().toISOString().slice(0, 10);
-    await client.spreadsheets.values.append({
+    // Write into the first empty row, not values.append: append lands after the end of the
+    // Google Sheets Table, and a tab made by new-tracker-tab inherits a Table ~170 rows long
+    // with blank rows, so jobs appeared at row 168+ instead of row 2.
+    const endRow = nextRow + toAppend.length - 1;
+    await growTableTo(client, cfg, endRow);
+    await client.spreadsheets.values.update({
       spreadsheetId: cfg.spreadsheetId,
-      range: tabRange(cfg.sheetName, `A:${lastColumnLetter(headers)}`),
+      range: tabRange(cfg.sheetName, `A${nextRow}:${lastColumnLetter(headers)}${endRow}`),
       valueInputOption: 'USER_ENTERED',
-      insertDataOption: 'INSERT_ROWS',
       requestBody: { values: toAppend.map((j) => jobToRow(j, now, headers)) },
     });
   }
@@ -685,6 +746,15 @@ export async function reconcileSheetColumns(
         });
         pushed.push(id);
       }
+    }
+
+    // --- v2 measurement columns: push-only from jobs.json ---
+    const cells = measurementCells(job);
+    for (const name of MEASUREMENT_PUSHED) {
+      const at = headers.indexOf(name);
+      if (at < 0 || !cells[name] || String(row[at] ?? '').trim() === cells[name]) continue;
+      writes.push({ range: tabRange(cfg.sheetName, `${columnLetter(at)}${sheetRowNum}`), values: [[cells[name]]] });
+      pushed.push(id);
     }
 
     // --- Applied checkbox: pull-back only, Anshu is the only writer ---

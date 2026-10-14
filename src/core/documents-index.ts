@@ -49,7 +49,7 @@ export const INDEX_FILE = 'documents-index.json';
  * changes in a way existing PDFs should be rebuilt for. Part of the input
  * hash, so a bump regenerates everything once.
  */
-export const GENERATOR_VERSION = 2;
+export const GENERATOR_VERSION = 3; // 3: exact job title on the resume name line (ATS rule)
 
 export interface DocumentIndexEntry {
   company: string;

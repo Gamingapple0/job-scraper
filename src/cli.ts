@@ -2,7 +2,7 @@
 import { Command } from 'commander';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { loadConfig, type Config, type SearchConfig } from './core/config.js';
@@ -25,10 +25,16 @@ import {
   buildResumeFileName,
   buildCoverLetterFileName,
   resumeDocFor,
+  headlineTitle,
+  relocationNote,
   pickResumeVersion,
   type CleanJob,
+  type ResumeVersion,
+  type Stage,
 } from './core/stage-export.js';
 import { RESUME_VERSIONS } from './core/resume-version.js';
+import { activeProfile, PipelineProfile, setActiveProfile } from './core/profile.js';
+import { ChristmasCasualProfile } from './variants/christmas-casual.js';
 import { applyMaterials, MaterialsVerdictsSchema, type MaterialsReport, type MaterialsVerdict } from './core/materials.js';
 import {
   batchRootWindows,
@@ -50,6 +56,11 @@ import {
   startNewTrackerTab,
 } from './core/google-sheets.js';
 import { toJob, daysSince } from './core/normalize.js';
+import { checkLiveness } from './core/liveness.js';
+import { checkApplication } from './core/application.js';
+import { hardGate } from './core/fit-gates.js';
+import { loadLedger } from './core/ledger.js';
+import { APPLICATIONS_DIR, appSlug, buildCorpus, jdText, readAppFolder, toRenderDoc } from './core/application-files.js';
 
 const program = new Command();
 
@@ -75,7 +86,7 @@ program
   .option('--dry-run', 'scrape and print, write nothing')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
 
     const searches = resolveSearches(cfg, opts);
@@ -175,7 +186,7 @@ program
   .description('Summarise what is in the store')
   .action(async () => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
     const jobs = dedupeById(rt.store.all());
@@ -230,7 +241,7 @@ program
   .option('-o, --out <path>', 'output file (default: stdout)')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -254,6 +265,62 @@ program
     }
   });
 
+/* ------------------------------------------------- liveness (expired gate) */
+
+const LIVENESS_STAGES: Stage[] = ['fit-filter', 'tracker', 'materials', 'documents'];
+
+program
+  .command('check-open')
+  .description(
+    'Read each candidate job\'s live Seek or LinkedIn page and mark the ones no longer accepting ' +
+      'applications as expired; every stage then skips them. Run it before export-fit-inbox and before ' +
+      'export-materials-inbox. Resumable: it stops starting requests at --budget-seconds, and the next ' +
+      'call continues; repeat until remaining=0. Fails open: a blocked host or unreadable page changes nothing.',
+  )
+  .requiredOption('--stage <stage>', `which jobs to check: ${LIVENESS_STAGES.join(' | ')}`)
+  .option('--budget-seconds <n>', 'stop starting new requests after this long', parseIntArg, 150)
+  .option('--recheck-hours <n>', 'skip jobs checked more recently than this', parseIntArg, 6)
+  .option('--dry-run', 'report what would be marked, change nothing')
+  .action(async (opts) => {
+    const g = program.opts();
+    const cfg = await loadCfg(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+
+    const stage = opts.stage as Stage;
+    if (!LIVENESS_STAGES.includes(stage)) throw new Error(`--stage must be one of ${LIVENESS_STAGES.join(', ')}`);
+    const candidates = selectForStage(dedupeById(rt.store.all()), stage, {
+      maxAgeDays: stage === 'fit-filter' ? cfg.pipeline.fitInboxMaxAgeDays : undefined,
+    });
+
+    const expired: string[] = [];
+    const byId = new Map(candidates.map((j) => [j.id, j]));
+    const report = await checkLiveness(
+      candidates,
+      {
+        http: rt.http,
+        logger: rt.logger,
+        record: (id, patch) => {
+          if (patch.expiredAt) {
+            const j = byId.get(id)!;
+            expired.push(`${j.title} at ${j.company} (${j.source})`);
+          }
+          if (!opts.dryRun) rt.store.setLiveness(id, patch);
+        },
+      },
+      { deadline: Date.now() + opts.budgetSeconds * 1000, recheckAfterMs: opts.recheckHours * 3_600_000 },
+    );
+    if (!opts.dryRun) await rt.store.save();
+
+    for (const e of expired) rt.logger.info(`${opts.dryRun ? 'Would mark' : 'Marked'} expired: ${e}`);
+    rt.logger.info(
+      `Liveness (${stage}): ${candidates.length} candidate(s), checked ${report.checked}: ${report.expired} expired, ` +
+        `${report.open} open, ${report.unknown} unreadable; ${report.unchecked} left for the next call` +
+        (report.blockedHosts.length ? `; blocked: ${report.blockedHosts.join(', ')}` : ''),
+    );
+    console.log(`LIVENESS_RESULT ${JSON.stringify({ stage, ...report, remaining: report.unchecked })}`);
+  });
+
 /* ------------------------------------------------------- stage: fit-filter */
 
 program
@@ -264,11 +331,40 @@ program
   )
   .option('--max-age-days <n>', 'override pipeline.fitInboxMaxAgeDays', parseIntArg)
   .option('-o, --out <path>', 'override pipeline.fitInboxPath')
+  .option('--rescore', 'framework v2: export the open, unapplied queue (tracked/approved, not yet tiered) instead')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
+
+    if (opts.rescore) {
+      // Framework v2 re-score of the open queue: tracked/approved, unapplied, not yet re-scored.
+      let gatedOut = 0;
+      const open = dedupeById(rt.store.all()).filter(
+        (j) => !j.closed && !j.expiredAt && !j.interviewStage && (j.pipelineStatus === 'tracked' || j.pipelineStatus === 'fit_good') && !j.fitTier,
+      );
+      const queue = open.filter((j) => {
+        if (!hardGate(j)) return true;
+        rt.store.setFitTier(j.id, 'skip');
+        gatedOut++;
+        return false;
+      });
+      await rt.store.save();
+      const outPath = resolve(opts.out ?? cfg.pipeline.fitInboxPath);
+      await mkdir(dirname(outPath), { recursive: true });
+      await writeFile(outPath, JSON.stringify(queue.map(toCleanJob), null, 2), 'utf8');
+      rt.logger.info(`Re-score: ${gatedOut} open job(s) gated to skip in code; ${queue.length} written to ${outPath} for v2 judging (apply with apply-fit-verdicts --rescore).`);
+      return;
+    }
+
+    // v2 hard gates first: a gated job is judged bad here, in code, and never reaches the agent.
+    let gated = 0;
+    for (const j of selectForStage(dedupeById(rt.store.all()), 'fit-filter')) {
+      const reason = hardGate(j);
+      if (reason && rt.store.updateStatus(j.id, 'fit_bad', { actor: 'fit-gate', reason }).ok) gated++;
+    }
+    if (gated > 0) await rt.store.save();
 
     const jobs = dedupeById(rt.store.all());
     const selected = selectForStage(jobs, 'fit-filter', {
@@ -280,6 +376,7 @@ program
     await mkdir(dirname(outPath), { recursive: true });
     await writeFile(outPath, JSON.stringify(selected.map(toCleanJob), null, 2), 'utf8');
     rt.logger.info(
+      `Hard gates judged ${gated} job(s) bad without the agent. ` +
       `Wrote ${selected.length} job(s) awaiting a fit verdict to ${outPath} ` +
         `(${jobs.length - selected.length} excluded: already judged, closed, or older than ` +
         `${opts.maxAgeDays ?? cfg.pipeline.fitInboxMaxAgeDays} days)`,
@@ -291,6 +388,9 @@ const VerdictsSchema = z.array(
     id: z.string(),
     verdict: z.enum(['good', 'bad']),
     reason: z.string().optional(),
+    /** Framework v2: required on a good verdict from the v2 fit filter. */
+    tier: z.enum(['A', 'B']).optional(),
+    family: z.enum(['A', 'B', 'C', 'D']).optional(),
   }),
 );
 
@@ -298,11 +398,13 @@ program
   .command('apply-fit-verdicts <file>')
   .description(
     'Apply the fit-filter agent\'s verdicts back to the master store. ' +
-      'Plain code — the agent never touches jobs.json directly.',
+      'Plain code — the agent never touches jobs.json directly. With --rescore (framework v2 re-score of ' +
+      'the open queue) statuses are left alone and only the tier is set: good -> its tier, bad -> skip.',
   )
-  .action(async (file) => {
+  .option('--rescore', 'only set the v2 tier/family on already-tracked jobs, never move their status')
+  .action(async (file, opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -316,10 +418,19 @@ program
     let applied = 0;
     const skipped: Array<{ id: string; reason: string }> = [];
     for (const v of parsed.data) {
+      if (opts.rescore) {
+        // Re-score of the open queue: status stays put, only the v2 tier moves.
+        const res = rt.store.setFitTier(v.id, v.verdict === 'good' && v.tier ? v.tier : 'skip', v.family);
+        if (res.ok) applied++;
+        else skipped.push({ id: v.id, reason: res.reason });
+        continue;
+      }
       const to: PipelineStatus = v.verdict === 'good' ? 'fit_good' : 'fit_bad';
       const res = rt.store.updateStatus(v.id, to, { actor: 'fit-filter-agent', reason: v.reason });
-      if (res.ok) applied++;
-      else skipped.push({ id: v.id, reason: res.reason });
+      if (res.ok) {
+        applied++;
+        if (v.verdict === 'good' && v.tier) rt.store.setFitTier(v.id, v.tier, v.family);
+      } else skipped.push({ id: v.id, reason: res.reason });
     }
 
     await rt.store.save();
@@ -341,7 +452,7 @@ program
   .option('-o, --out <path>', 'override pipeline.trackerInboxPath (AU file only)')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -349,8 +460,10 @@ program
     const selected = selectForStage(jobs, 'tracker');
     selected.sort((a, b) => (b.postedAt ?? b.scrapedAt).localeCompare(a.postedAt ?? a.scrapedAt));
 
-    const au = selected.filter((j) => j.location.country === 'AU');
-    const intl = selected.filter((j) => j.location.country !== 'AU');
+    // A profile with no international sheet sends everything to the one tracker.
+    const split = activeProfile().hasIntlSheet;
+    const au = selected.filter((j) => !split || j.location.country === 'AU');
+    const intl = selected.filter((j) => split && j.location.country !== 'AU');
 
     const outPath = resolve(opts.out ?? cfg.pipeline.trackerInboxPath);
     await mkdir(dirname(outPath), { recursive: true });
@@ -378,7 +491,7 @@ program
   .option('-o, --out <path>', 'override pipeline.profileInboxPath')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -431,7 +544,7 @@ program
   .option('--dry-run', 'validate only, write nothing')
   .action(async (file, opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -459,7 +572,7 @@ program
   .option('-o, --out <path>', 'override pipeline.coverLetterInboxPath')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -495,7 +608,7 @@ program
   .option('--dry-run', 'validate only, write nothing')
   .action(async (file, opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -526,7 +639,7 @@ program
   .option('-o, --out <path>', 'override pipeline.materialsInboxPath')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -539,11 +652,13 @@ program
     await mkdir(dirname(outPath), { recursive: true });
     await writeFile(outPath, JSON.stringify(items, null, 2), 'utf8');
 
-    const byVersion = (v: string) => items.filter((i) => i.resumeVersion === v).length;
     const both = items.filter((i) => i.needs.length === 2).length;
+    const versions = [...new Set(items.map((i) => i.resumeVersion))]
+      .map((v) => `${items.filter((i) => i.resumeVersion === v).length} ${v}`)
+      .join(', ');
     rt.logger.info(
       `Wrote ${items.length} job(s) to ${outPath}: ${both} need both pieces, ${items.length - both} need one; ` +
-        `${byVersion('software-engineer')} software-engineer, ${byVersion('test-analyst')} test-analyst.`,
+        `${versions || 'none'}.`,
     );
   });
 
@@ -560,7 +675,7 @@ program
   .option('--dry-run', 'validate only, write nothing')
   .action(async (file, opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -597,7 +712,7 @@ program
   .option('--force', 'rebuild every eligible job, not just new or changed ones (use after editing a base resume Google Doc)')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -642,6 +757,11 @@ program
     for (const job of selected) {
       const dj = toDocumentJob(job);
       const resumeDocId = resumeDocFor(dj.resumeVersion, cfg);
+      if (!resumeDocId) {
+        rt.logger.error(`No base resume Google Doc configured for "${dj.resumeVersion}" (pipeline.documentsResumeDocs).`);
+        process.exitCode = 2;
+        return;
+      }
       const hash = inputsHash({
         company: dj.company,
         title: dj.title,
@@ -707,6 +827,8 @@ program
         coverLetter: dj.coverLetter,
         relocationNote: dj.relocationNote,
         isInternational: dj.isInternational,
+        targetTitle: dj.targetTitle,
+        skillsHeading: activeProfile().skillsHeading,
         resumeDocId,
         outDir: join(outBase, folder),
         resumeFileName: names.resume.replace(/\.pdf$/i, '.docx'),
@@ -764,7 +886,7 @@ program
           folder: p.folder,
           resume: p.resume,
           coverLetter: p.coverLetter,
-          resumeVersion: p.version as 'software-engineer' | 'test-analyst',
+          resumeVersion: p.version as ResumeVersion,
           hash: p.hash,
           generatedAt: now,
         };
@@ -791,6 +913,196 @@ program
     }
   });
 
+/* -------------------------------------------- framework v2: applications */
+
+program
+  .command('app-new <jobId>')
+  .description(
+    'Framework v2: start a hand-built application for one job. Creates applications/<date>-<company>-<role>/ ' +
+      'with jd.txt (the scraped JD), an application.json skeleton, and a brief.md template (research, thesis, QA, outreach). ' +
+      'Follow Claude outputs/v2/application-workflow.md from there.',
+  )
+  .action(async (jobId: string) => {
+    const g = program.opts();
+    const cfg = await loadCfg(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+    const job = rt.store.get(jobId);
+    if (!job) {
+      rt.logger.error(`Unknown job id ${jobId}.`);
+      process.exitCode = 2;
+      return;
+    }
+    const dir = join(APPLICATIONS_DIR, appSlug(job));
+    if (existsSync(join(dir, 'application.json'))) {
+      rt.logger.error(`${dir} already exists; open it instead.`);
+      process.exitCode = 2;
+      return;
+    }
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'jd.txt'), jdText(job), 'utf8');
+    const skeleton = {
+      jobId: job.id,
+      company: job.company,
+      role: job.title,
+      url: job.url,
+      tier: job.fitTier === 'B' ? 'B' : 'A',
+      family: job.roleFamily ?? 'A',
+      archetype: 'backend-db',
+      thesis: '',
+      international: job.location.country !== 'AU',
+      headline: [headlineTitle(job.title), relocationNote(job), job.location.country !== 'AU' ? 'PTE: 88' : null].filter(Boolean).join(' | '),
+      summary: '',
+      employment: ['jdr-swe', 'jdr-qa', 'deakin-lab', 'vosyn'].map((ref) => ({ ref, bullets: [] })),
+      projects: [],
+      education: { marks: [] },
+      skills: [],
+      status: 'draft',
+    };
+    await writeFile(join(dir, 'application.json'), JSON.stringify(skeleton, null, 2) + '\n', 'utf8');
+    const tmpl = await readFile(resolve('Claude outputs/v2/brief-template.md'), 'utf8').catch(() => '');
+    await writeFile(join(dir, 'brief.md'), tmpl.replace('{{title}}', job.title).replace('{{company}}', job.company), 'utf8');
+    rt.logger.info(`Created ${dir}`);
+  });
+
+program
+  .command('app-check <dir>')
+  .description(
+    'Framework v2 QA gate (deterministic part of section 9): ledger validator (every number, date, tool and ' +
+      'skill placement traces to profile/facts.yaml), banned phrases and the human-voice checklist, structure ' +
+      '(bullet budgets, summary/letter length), and uniqueness against every other application and every ' +
+      'earlier pipeline document. Exit 3 on any error.',
+  )
+  .action(async (dir: string) => {
+    const g = program.opts();
+    const cfg = await loadCfg(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+    const res = runAppCheck(dir, rt.store.all());
+    if (!res) {
+      process.exitCode = 2;
+      return;
+    }
+    printCheck(res);
+    if (res.errors.length > 0) process.exitCode = 3;
+  });
+
+program
+  .command('app-render <dir>')
+  .description(
+    'Framework v2: run app-check, then render the resume (and letter.txt if present) through the fixed ' +
+      'Xero-style template to DOCX + PDF, hold it to one page, and verify the PDF with pdftotext. Files go ' +
+      'to <documentsOutputDir>/Applications/<folder>/ ($SCRAPER_DOCS_OUTPUT_DIR overrides the root). ' +
+      'Writes qa.json into the folder.',
+  )
+  .action(async (dir: string) => {
+    const g = program.opts();
+    const cfg = await loadCfg(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+    const check = runAppCheck(dir, rt.store.all());
+    if (!check) {
+      process.exitCode = 2;
+      return;
+    }
+    printCheck(check);
+    if (check.errors.length > 0) {
+      rt.logger.error('Not rendered: fix the errors above first.');
+      process.exitCode = 3;
+      return;
+    }
+    const folder = readAppFolder(dir);
+    const outRoot = process.env.SCRAPER_DOCS_OUTPUT_DIR || cfg.pipeline.documentsOutputDir;
+    // v1 layout (Anshu, 11 Oct): <root>\<active batch timestamp>\<Company>\, same batch generate-documents uses.
+    let batch = await findActiveBatch(outRoot);
+    if (!batch) {
+      batch = newBatchName();
+      await mkdir(join(outRoot, batch), { recursive: true });
+      await writeIndex(join(outRoot, batch), emptyIndex(batchRootWindows(cfg.pipeline.documentsOutputDir, batch)));
+    }
+    const batchDir = join(outRoot, batch);
+    const companies = (await readdir(batchDir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    const doc = toRenderDoc(folder, loadLedger(), join(batchDir, resolveCompanyFolder(companies, folder.app.company)));
+    const docPath = join(dir, 'render.json');
+    await writeFile(docPath, JSON.stringify(doc, null, 2), 'utf8');
+    const proc = spawnSync('python3', [resolve('scripts/render_application.py'), docPath], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+    if (proc.status !== 0) {
+      rt.logger.error(`render_application.py exited ${proc.status}: ${proc.stderr}`);
+      process.exitCode = 2;
+      return;
+    }
+    const result = JSON.parse(proc.stdout.trim().split('\n').pop() ?? '{}');
+    await writeFile(join(dir, 'qa.json'), JSON.stringify({ checkedAt: new Date().toISOString(), check, render: result }, null, 2), 'utf8');
+    if (!result.ok) {
+      for (const e of result.errors) rt.logger.error(e);
+      process.exitCode = 3;
+      return;
+    }
+    if (folder.app.status === 'draft') {
+      const raw = JSON.parse(await readFile(join(dir, 'application.json'), 'utf8'));
+      raw.status = 'ready';
+      await writeFile(join(dir, 'application.json'), JSON.stringify(raw, null, 2) + '\n', 'utf8');
+    }
+    rt.logger.info(`Rendered (resume ${result.pages.resume} page${result.pages.letter ? `, letter ${result.pages.letter} page` : ''}):\n  ${result.files.join('\n  ')}`);
+  });
+
+program
+  .command('app-sent <dir>')
+  .description(
+    'Framework v2: record that Anshu sent this application. Marks the job applied and stores the measurement ' +
+      'fields (tier, role family, archetype, thesis, letter sent, applied date) that sync-sheet pushes into the ' +
+      'tracker. Outreach Sent, Referral and Outcome are his own columns in the Sheet.',
+  )
+  .option('--date <yyyy-mm-dd>', 'applied date (default today)')
+  .action(async (dir: string, opts) => {
+    const g = program.opts();
+    const cfg = await loadCfg(resolve(g.config));
+    const rt = makeRuntime(cfg, g.logLevel as LogLevel);
+    await rt.store.load();
+    const { app, letter } = readAppFolder(dir);
+    const appliedAt = String(opts.date ?? new Date().toISOString().slice(0, 10));
+    if (app.jobId) {
+      const res = rt.store.updateStatus(app.jobId, 'applied', { actor: 'manual', reason: 'framework v2' });
+      if (!res.ok && res.reason === 'unknown id') rt.logger.warn(`Job ${app.jobId} is not in jobs.json; recording the folder only.`);
+      rt.store.setApplication(app.jobId, {
+        tier: app.tier,
+        family: app.family,
+        archetype: app.archetype,
+        thesis: app.thesis,
+        letterSent: Boolean(letter),
+        appliedAt,
+        folder: dir,
+      });
+      await rt.store.save();
+    }
+    const raw = JSON.parse(await readFile(join(dir, 'application.json'), 'utf8'));
+    raw.status = 'sent';
+    raw.sentAt = appliedAt;
+    await writeFile(join(dir, 'application.json'), JSON.stringify(raw, null, 2) + '\n', 'utf8');
+    rt.logger.info(`Recorded ${app.company} / ${app.role} as sent on ${appliedAt}. Run sync-sheet to push it to the tracker.`);
+  });
+
+function runAppCheck(dir: string, jobs: Job[]) {
+  let folder;
+  try {
+    folder = readAppFolder(dir);
+  } catch (e) {
+    console.error(`${dir}/application.json is not valid yet: ${e instanceof z.ZodError ? e.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') : String(e)}`);
+    return null;
+  }
+  if (!folder.jd.trim()) console.warn('jd.txt is empty: skill placement and letter tool checks need the JD.');
+  const job = jobs.find((j) => j.id === folder.app.jobId);
+  // Anshu's rule: outside Melbourne the headline always says "Open to relocation to <X>", even when the ad also allows Melbourne.
+  const requiredHeadline = job ? [relocationNote(job), job.location.country !== 'AU' ? 'PTE: 88' : null].filter((x): x is string => !!x) : [];
+  return checkApplication({ app: folder.app, letter: folder.letter, jd: folder.jd, ledger: loadLedger(), corpus: buildCorpus(dir, jobs), requiredHeadline });
+}
+
+function printCheck(res: { errors: string[]; warnings: string[] }): void {
+  for (const w of res.warnings) console.log(`WARN  ${w}`);
+  for (const e of res.errors) console.log(`FAIL  ${e}`);
+  console.log(res.errors.length === 0 ? `app-check passed${res.warnings.length ? ` with ${res.warnings.length} warning(s)` : ''}.` : `app-check: ${res.errors.length} error(s).`);
+}
+
 /* -------------------------------------------------------- marking applied */
 
 program
@@ -804,7 +1116,7 @@ program
   .option('--note <text>', 'record an applyNote on each job (marks it as applied by automation)')
   .action(async (ids: string[], opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -841,7 +1153,7 @@ program
   .option('--clear', 'remove the note instead of setting it')
   .action(async (id: string, text: string[], opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
     const res = rt.store.setApplyNote(id, opts.clear ? undefined : text.join(' '));
@@ -865,7 +1177,7 @@ program
   )
   .action(async (id: string, method: string) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
     if (method !== 'easy_apply' && method !== 'quick_apply' && method !== 'external') {
@@ -895,7 +1207,7 @@ program
   .option('-o, --out <path>', 'override pipeline.applyQueuePath')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -946,7 +1258,7 @@ program
   )
   .action(async (file) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -983,7 +1295,7 @@ program
   )
   .action(async () => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     await runInteractiveAuth(cfg.pipeline.sheets);
   });
 
@@ -1000,7 +1312,7 @@ program
   .option('--intl', 'sync only pipeline.trackerInboxIntlPath into pipeline.sheetsIntl (skip the AU pair)')
   .action(async (file: string | undefined, opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
 
     const syncOne = async (sheetsKey: 'sheets' | 'sheetsIntl', fileOverride?: string) => {
@@ -1061,11 +1373,11 @@ program
       // job's resume version so it is never re-queued as "drifted".
       for (const p of reconciled.profilePulledBack) {
         const j = jobsById.get(p.id);
-        rt.store.setProfile(p.id, { careerProfile: p.careerProfile, version: j ? pickResumeVersion(j) : 'software-engineer' });
+        rt.store.setProfile(p.id, { careerProfile: p.careerProfile, version: j ? pickResumeVersion(j) : activeProfile().legacyVersion });
       }
       for (const c of reconciled.coverLetterPulledBack) {
         const j = jobsById.get(c.id);
-        rt.store.setCoverLetter(c.id, { coverLetter: c.coverLetter, version: j ? pickResumeVersion(j) : 'software-engineer' });
+        rt.store.setCoverLetter(c.id, { coverLetter: c.coverLetter, version: j ? pickResumeVersion(j) : activeProfile().legacyVersion });
       }
       // Runs after the pull-backs above so the snapshot always wins with what the cell really holds.
       for (const snap of reconciled.snapshots) rt.store.setSheetSnapshot(snap.id, snap);
@@ -1110,7 +1422,7 @@ program
       await syncOne('sheets', file);
     } else {
       await syncOne('sheets');
-      await syncOne('sheetsIntl');
+      if (activeProfile().hasIntlSheet) await syncOne('sheetsIntl');
     }
   });
 
@@ -1126,7 +1438,7 @@ program
   .action(async (opts) => {
     const g = program.opts();
     const configPath = resolve(g.config);
-    const cfg = await loadConfig(configPath);
+    const cfg = await loadCfg(configPath);
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
 
     const rotateOne = async (sheetsKey: 'sheets' | 'sheetsIntl') => {
@@ -1155,7 +1467,7 @@ program
       await rotateOne('sheetsIntl');
     } else {
       await rotateOne('sheets');
-      await rotateOne('sheetsIntl');
+      if (activeProfile().hasIntlSheet) await rotateOne('sheetsIntl');
     }
   });
 
@@ -1172,7 +1484,7 @@ program
   .option('--commit', 'actually save to jobs.json (default: dry run)')
   .action(async (file, opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, g.logLevel as LogLevel);
     await rt.store.load();
 
@@ -1213,7 +1525,7 @@ program
   .option('-w, --where <location>', 'location', 'All Melbourne VIC')
   .action(async (opts) => {
     const g = program.opts();
-    const cfg = await loadConfig(resolve(g.config));
+    const cfg = await loadCfg(resolve(g.config));
     const rt = makeRuntime(cfg, 'debug');
 
     const adapter = createAdapter(opts.source, {
@@ -1264,6 +1576,21 @@ program.parseAsync(process.argv).catch((err) => {
 });
 
 /* --------------------------------------------------------------- plumbing */
+
+/** config.profile -> the PipelineProfile subclass that owns that job type's rules. */
+const PROFILES: Record<string, () => PipelineProfile> = {
+  main: () => new PipelineProfile(),
+  'christmas-casual': () => new ChristmasCasualProfile(),
+};
+
+/** loadConfig + activate the profile it names, so every stage below runs under that job type's rules. */
+async function loadCfg(path: string): Promise<Config> {
+  const cfg = await loadConfig(path);
+  const make = PROFILES[cfg.profile];
+  if (!make) throw new Error(`Unknown profile "${cfg.profile}" in ${path}. Known: ${Object.keys(PROFILES).join(', ')}`);
+  setActiveProfile(make());
+  return cfg;
+}
 
 type Runtime = ReturnType<typeof makeRuntime>;
 

@@ -21,6 +21,8 @@ const SourceSettingsSchema = z
   .passthrough(); // adapters read their own extra keys (endpoints, siteKey, ...)
 
 export const ConfigSchema = z.object({
+  /** Which PipelineProfile (src/core/profile.ts) this config runs under: 'main' or a variant such as 'christmas-casual'. */
+  profile: z.string().default('main'),
   dataDir: z.string().default('./data'),
   userAgent: z
     .string()
@@ -55,6 +57,44 @@ export const ConfigSchema = z.object({
       trackerInboxIntlPath: z.string().default('./data/stage/tracker-inbox-intl.json'),
       profileInboxPath: z.string().default('./data/stage/profile-inbox.json'),
       coverLetterInboxPath: z.string().default('./data/stage/cover-letter-inbox.json'),
+      /** Combined career-profile + cover-letter inbox (one record per job, JD once). */
+      materialsInboxPath: z.string().default('./data/stage/materials-inbox.json'),
+      /** Ready-to-submit work list for the LinkedIn / SEEK apply skills. */
+      applyQueuePath: z.string().default('./data/stage/apply-queue.json'),
+      /**
+       * Where `generate-documents` writes its per-job manifest before
+       * handing off to the Python/LibreOffice conversion step. Not an LLM
+       * inbox — nothing reads this but that one script.
+       */
+      documentsManifestPath: z.string().default('./data/stage/documents-manifest.json'),
+      /**
+       * Root folder `generate-documents` writes into: one subfolder per
+       * company (created on first use, reused after that) plus
+       * documents-index.json. Overridable via
+       * the SCRAPER_DOCS_OUTPUT_DIR environment variable — needed because
+       * this same command runs in two different places: natively on
+       * Windows (where this absolute path is correct as-is) and inside
+       * the Claude Cowork device_bash Linux sandbox (where the connected
+       * folder is mounted elsewhere, e.g. "$HOME/mnt/Documents/Resumes
+       * Gen" — export SCRAPER_DOCS_OUTPUT_DIR to that path before invoking
+       * the command there).
+       */
+      documentsOutputDir: z.string().default('C:\\Users\\madhi\\OneDrive\\Documents\\Resumes Gen'),
+      /**
+       * Google Doc ids for the two base resume documents (File > Share >
+       * "Anyone with the link" required, since generate-documents fetches
+       * them by anonymous export). Anshu edits these directly in Google
+       * Docs (Employment/Education/Technical Skills) — the Career Profile
+       * paragraph is the only part generate-documents overwrites.
+       */
+      documentsResumeDocs: z
+        .object({
+          softwareEngineer: z.string().default('1Ckp91JCvQGZFhrkzc-lgzIMyqauBF8b4ShjOdS2N2dw'),
+          testAnalyst: z.string().default('15gKsst2OHNSaGPsYbtqUIbpKRS6M2ptet7uMdllp5KI'),
+          /** Only read by the christmas-casual profile. */
+          christmasCasual: z.string().default(''),
+        })
+        .default({}),
       /** Don't send a listing to the (token-costing) fit-filter agent once
        * it's older than this, even if still pipelineStatus 'scraped'. */
       fitInboxMaxAgeDays: z.number().int().positive().default(14),
@@ -65,6 +105,8 @@ export const ConfigSchema = z.object({
           sheetName: z.string().default('Tracker'),
           oauthClientPath: z.string().default('./config/google-oauth-client.json'),
           oauthTokenPath: z.string().default('./config/google-oauth-token.json'),
+          /** Adds a Country column after Location. Off for the AU tracker — every AU job is AU. */
+          includeCountry: z.boolean().default(false),
         })
         .default({}),
       /**
@@ -80,6 +122,8 @@ export const ConfigSchema = z.object({
           sheetName: z.string().default('Tracker'),
           oauthClientPath: z.string().default('./config/google-oauth-client.json'),
           oauthTokenPath: z.string().default('./config/google-oauth-token.json'),
+          /** International jobs span many countries, so this tracker gets a Country column. */
+          includeCountry: z.boolean().default(true),
         })
         .default({}),
     })

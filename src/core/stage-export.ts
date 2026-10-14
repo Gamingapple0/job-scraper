@@ -2,15 +2,12 @@ import type { ApplyMethod, Job } from './types.js';
 import type { Config } from './config.js';
 import { daysSince } from './normalize.js';
 import { formatLocation, formatSalary } from './export.js';
-import {
-  LEGACY_RESUME_VERSION,
-  RESUME_BASE_FILE,
-  RESUME_DOC_KEY,
-  pickResumeVersion,
-  type ResumeVersion,
-} from './resume-version.js';
+import type { ResumeVersion } from './resume-version.js';
+import { activeProfile, pickResumeVersion } from './profile.js';
+import { hardGate } from './fit-gates.js';
 
-export { pickResumeVersion, type ResumeVersion } from './resume-version.js';
+export { pickResumeVersion } from './profile.js';
+export type { ResumeVersion } from './resume-version.js';
 
 /**
  * The minimal shape handed to an LLM stage. Deliberately excludes `raw`,
@@ -86,7 +83,7 @@ export function toProfileJob(job: Job): ProfileJob {
     title: job.title,
     company: job.company,
     resumeVersion: version,
-    resumeFile: RESUME_BASE_FILE[version],
+    resumeFile: activeProfile().resumeFile(version),
   };
   if (job.description) p.description = job.description;
   if (job.profileNote) p.previousNote = job.profileNote;
@@ -120,7 +117,7 @@ export function toCoverLetterJob(job: Job): CoverLetterJob {
     title: job.title,
     company: job.company,
     resumeVersion: version,
-    resumeFile: RESUME_BASE_FILE[version],
+    resumeFile: activeProfile().resumeFile(version),
   };
   if (job.description) c.description = job.description;
   if (job.coverLetterNote) c.previousNote = job.coverLetterNote;
@@ -168,14 +165,14 @@ export function toMaterialsJob(job: Job): MaterialsJob {
     title: job.title,
     company: job.company,
     resumeVersion: version,
-    resumeFile: RESUME_BASE_FILE[version],
+    resumeFile: activeProfile().resumeFile(version),
     needs,
   };
   if (job.description) m.description = job.description;
   if (!wantsProfile && job.careerProfile) m.careerProfile = job.careerProfile;
   const drifted = [profileDrifted(job) && 'career profile', coverLetterDrifted(job) && 'cover letter'].filter(Boolean);
   if (drifted.length > 0) {
-    const was = job.careerProfileVersion ?? job.coverLetterVersion ?? LEGACY_RESUME_VERSION;
+    const was = job.careerProfileVersion ?? job.coverLetterVersion ?? activeProfile().legacyVersion;
     m.redo = `existing ${drifted.join(' and ')} written from the ${was} resume; this job needs ${version}. Write fresh, do not reuse the old text.`;
   }
   const notes = [job.profileNote, job.coverLetterNote].filter((n): n is string => Boolean(n));
@@ -196,6 +193,8 @@ export interface DocumentJob {
   careerProfile: string;
   coverLetter: string;
   resumeVersion: ResumeVersion;
+  /** The posting's title next to the name, only for a profile with titleHeadline (the seasonal one). Empty otherwise. */
+  targetTitle: string;
   /** See relocationNote() — null when the job is Melbourne, VIC (home base, nothing to add). */
   relocationNote: string | null;
   /**
@@ -216,9 +215,27 @@ export function toDocumentJob(job: Job): DocumentJob {
     careerProfile: job.careerProfile ?? '',
     coverLetter: job.coverLetter ?? '',
     resumeVersion: pickResumeVersion(job),
+    targetTitle: activeProfile().titleHeadline ? headlineTitle(job.title) : '',
     relocationNote: relocationNote(job),
     isInternational: job.location.country !== 'AU',
   };
+}
+
+/**
+ * The exact posting title as it goes on the resume's name line. Bracketed
+ * noise ("(Casual)", "[Melbourne]") is dropped; a title still too long for
+ * one header line is cut to its first clause, which is still the posting's
+ * own words, never a synonym.
+ */
+export function headlineTitle(title: string): string {
+  const clean = title
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    // trailing location: "Junior Software Engineer - South Bank, QLD", "... | Melbourne", "... - Remote"
+    .replace(/\s+[-–—|]\s+[^-–—|]*\b(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT|Remote|Hybrid|Sydney|Melbourne|Brisbane|Perth|Adelaide|Canberra|Hobart|Darwin|Auckland|Wellington|London|Dublin|Singapore)\b[^-–—|]*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[\s,\-–—|:]+$/, '');
+  return clean.length <= 45 ? clean : titleClause(clean);
 }
 
 /** Country codes the searches in config.json actually target — see relocationNote(). */
@@ -269,11 +286,11 @@ export interface StageSelectOptions {
  * refuses to build with it.
  */
 export function profileDrifted(j: Job): boolean {
-  return Boolean(j.careerProfile) && (j.careerProfileVersion ?? LEGACY_RESUME_VERSION) !== pickResumeVersion(j);
+  return Boolean(j.careerProfile) && (j.careerProfileVersion ?? activeProfile().legacyVersion) !== pickResumeVersion(j);
 }
 
 export function coverLetterDrifted(j: Job): boolean {
-  return Boolean(j.coverLetter) && (j.coverLetterVersion ?? LEGACY_RESUME_VERSION) !== pickResumeVersion(j);
+  return Boolean(j.coverLetter) && (j.coverLetterVersion ?? activeProfile().legacyVersion) !== pickResumeVersion(j);
 }
 
 /**
@@ -306,7 +323,7 @@ function needsLetter(j: Job): boolean {
  * next run without needing a matching status transition to exist.
  */
 function isStillOpen(j: Job): boolean {
-  return !j.closed && !j.interviewStage;
+  return !j.closed && !j.expiredAt && !j.interviewStage;
 }
 
 /**
@@ -331,8 +348,9 @@ export function selectForStage(jobs: Job[], stage: Stage, opts: StageSelectOptio
   }
 
   if (stage === 'tracker') {
-    // only jobs the fit-filter agent has already approved.
-    return jobs.filter((j) => isStillOpen(j) && j.pipelineStatus === 'fit_good');
+    // only jobs the fit-filter agent has already approved, minus anything a
+    // v2 hard gate now drops (approvals made before the gates existed).
+    return jobs.filter((j) => isStillOpen(j) && j.pipelineStatus === 'fit_good' && j.fitTier !== 'skip' && !hardGate(j));
   }
 
   if (stage === 'documents') {
@@ -431,7 +449,7 @@ export function companyToken(company: string): string {
  * first break is the tree, not the job, so it's what gets dropped first
  * when the full title won't fit.
  */
-function titleClause(title: string): string {
+export function titleClause(title: string): string {
   const idx = title.search(/\s[-–—]\s|[,/(:;|]/);
   return (idx === -1 ? title : title.slice(0, idx)).trim();
 }
@@ -482,5 +500,5 @@ export function buildCoverLetterFileName(title: string, company: string): string
 
 /** The Google Doc id for a resume version. The version itself comes from classifyResumeVersion, never from a second title check here. */
 export function resumeDocFor(version: ResumeVersion, cfg: Config): string {
-  return cfg.pipeline.documentsResumeDocs[RESUME_DOC_KEY[version]];
+  return activeProfile().resumeDocId(version, cfg);
 }

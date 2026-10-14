@@ -14,18 +14,20 @@
  * Plain deterministic code, zero LLM tokens.
  */
 
-export type ResumeVersion = 'software-engineer' | 'test-analyst';
+/** The main tracker's two bases. Every other version belongs to a profile subclass (src/variants/). */
+export type TechResumeVersion = 'software-engineer' | 'test-analyst';
+export type ResumeVersion = TechResumeVersion | 'christmas-casual';
 
-export const RESUME_VERSIONS: readonly ResumeVersion[] = ['software-engineer', 'test-analyst'];
+export const RESUME_VERSIONS: readonly ResumeVersion[] = ['software-engineer', 'test-analyst', 'christmas-casual'];
 
 /** Where the LLM stages read each base resume from (paths relative to the repo root). */
-export const RESUME_BASE_FILE: Record<ResumeVersion, string> = {
+export const RESUME_BASE_FILE: Record<TechResumeVersion, string> = {
   'software-engineer': 'Claude outputs/resume.md',
   'test-analyst': 'Claude outputs/resume-test-analyst.md',
 };
 
 /** Key into config.pipeline.documentsResumeDocs for each version's Google Doc. */
-export const RESUME_DOC_KEY: Record<ResumeVersion, 'softwareEngineer' | 'testAnalyst'> = {
+export const RESUME_DOC_KEY: Record<TechResumeVersion, 'softwareEngineer' | 'testAnalyst'> = {
   'software-engineer': 'softwareEngineer',
   'test-analyst': 'testAnalyst',
 };
@@ -35,7 +37,7 @@ export const RESUME_DOC_KEY: Record<ResumeVersion, 'softwareEngineer' | 'testAna
  * software-engineer base existed then, so an unstamped profile/letter is a
  * software-engineer one by construction.
  */
-export const LEGACY_RESUME_VERSION: ResumeVersion = 'software-engineer';
+export const LEGACY_RESUME_VERSION: TechResumeVersion = 'software-engineer';
 
 /** Titles that are unambiguously testing/QA roles. */
 const TEST_TITLE =
@@ -61,8 +63,8 @@ export interface ResumeVersionInput {
   description?: string;
 }
 
-export interface ResumeVersionDecision {
-  version: ResumeVersion;
+export interface ResumeVersionDecision<V extends ResumeVersion = ResumeVersion> {
+  version: V;
   /** Short human-readable why, for audit output and logs. */
   reason: string;
 }
@@ -71,7 +73,7 @@ function count(re: RegExp, text: string): number {
   return (text.match(re) ?? []).length;
 }
 
-export function classifyResumeVersion(job: ResumeVersionInput): ResumeVersionDecision {
+export function classifyResumeVersion(job: ResumeVersionInput): ResumeVersionDecision<TechResumeVersion> {
   if (TEST_TITLE.test(job.title)) {
     return { version: 'test-analyst', reason: 'title names a testing/QA role' };
   }
@@ -93,6 +95,7 @@ export function classifyResumeVersion(job: ResumeVersionInput): ResumeVersionDec
   return { version: 'software-engineer', reason: 'no testing/QA signal in the title' };
 }
 
-export function pickResumeVersion(job: ResumeVersionInput): ResumeVersion {
+/** The main tracker's rule only. Pipeline code calls pickResumeVersion from ./profile.js, which honours the active profile. */
+export function pickResumeVersion(job: ResumeVersionInput): TechResumeVersion {
   return classifyResumeVersion(job).version;
 }

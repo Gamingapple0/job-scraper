@@ -1,6 +1,6 @@
 import type { ApplyMethod, Job } from './types.js';
 import type { DocumentsIndex } from './documents-index.js';
-import { pickResumeVersion } from './resume-version.js';
+import { pickResumeVersion } from './profile.js';
 import { selectForStage } from './stage-export.js';
 
 /**

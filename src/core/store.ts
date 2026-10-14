@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { ApplyMethod, Job, PipelineStatus, RunStats, UpsertResult } from './types.js';
+import type { ApplyMethod, Job, JobApplication, PipelineStatus, RunStats, UpsertResult } from './types.js';
 import { isProbablySameJob, mergeJob } from './dedupe.js';
 import { advanceStatus, type TransitionResult } from './pipeline-status.js';
 import type { ResumeVersion } from './resume-version.js';
@@ -58,8 +58,14 @@ export interface Store {
    * listing's apply button.
    */
   setApplyMethod(id: string, method: ApplyMethod): { ok: true } | { ok: false; reason: 'unknown id' };
+  /** Records a live-page check (see Job.expiredAt). */
+  setLiveness(id: string, patch: { liveCheckedAt: string; expiredAt?: string }): { ok: true } | { ok: false; reason: 'unknown id' };
   /** Sets Anshu's manual interviewStage tracking field. No ratchet, no allowed-transition graph. */
   setInterviewStage(id: string, stage: string): { ok: true } | { ok: false; reason: 'unknown id' };
+  /** Framework v2 measurement fields, written once by app-sent. */
+  setApplication(id: string, meta: JobApplication): { ok: true } | { ok: false; reason: 'unknown id' };
+  /** Framework v2 fit tier and role family (apply-fit-verdicts). */
+  setFitTier(id: string, tier: 'A' | 'B' | 'skip', family?: 'A' | 'B' | 'C' | 'D'): { ok: true } | { ok: false; reason: 'unknown id' };
   save(): Promise<void>;
   writeRunSnapshot(stats: RunStats[], changed: { created: string[]; updated: string[] }): Promise<string>;
   history(): Promise<RunHistoryEntry[]>;
@@ -241,10 +247,33 @@ export class JsonStore implements Store {
     return { ok: true };
   }
 
+  setLiveness(id: string, patch: { liveCheckedAt: string; expiredAt?: string }): { ok: true } | { ok: false; reason: 'unknown id' } {
+    const job = this.jobs.get(id);
+    if (!job) return { ok: false, reason: 'unknown id' };
+    job.liveCheckedAt = patch.liveCheckedAt;
+    if (patch.expiredAt) job.expiredAt = patch.expiredAt;
+    return { ok: true };
+  }
+
   setInterviewStage(id: string, stage: string): { ok: true } | { ok: false; reason: 'unknown id' } {
     const job = this.jobs.get(id);
     if (!job) return { ok: false, reason: 'unknown id' };
     job.interviewStage = stage;
+    return { ok: true };
+  }
+
+  setApplication(id: string, meta: JobApplication): { ok: true } | { ok: false; reason: 'unknown id' } {
+    const job = this.jobs.get(id);
+    if (!job) return { ok: false, reason: 'unknown id' };
+    job.application = meta;
+    return { ok: true };
+  }
+
+  setFitTier(id: string, tier: 'A' | 'B' | 'skip', family?: 'A' | 'B' | 'C' | 'D'): { ok: true } | { ok: false; reason: 'unknown id' } {
+    const job = this.jobs.get(id);
+    if (!job) return { ok: false, reason: 'unknown id' };
+    job.fitTier = tier;
+    if (family) job.roleFamily = family;
     return { ok: true };
   }
 

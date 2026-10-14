@@ -20,10 +20,41 @@ const LIST_LINE = /^\s*(?:[-*•▪◦]|\d+[.)])\s+\S/m;
 const MARKDOWN = /\*\*|^#{1,6}\s/m;
 const JSON_LEAK = /"career_profile"|"cover_letter"|^\s*[{[]/;
 
-const PROFILE_WORDS = { min: 60, max: 170 };
-/** The prompt asks for 250-350; a little slack either side because counters disagree on hyphenated words. */
-const LETTER_WORDS = { min: 235, max: 365 };
-const LETTER_PARAGRAPHS = { min: 3, max: 7 };
+export interface Range {
+  min: number;
+  max: number;
+}
+
+export interface LintLimits {
+  profileWords: Range;
+  letterWords: Range;
+  letterParagraphs: Range;
+}
+
+/** The main tracker's limits. A profile subclass passes its own. */
+export const DEFAULT_LIMITS: LintLimits = {
+  profileWords: { min: 60, max: 170 },
+  /** The prompt asks for 250-350; a little slack either side because counters disagree on hyphenated words. */
+  letterWords: { min: 235, max: 365 },
+  letterParagraphs: { min: 3, max: 7 },
+};
+
+/**
+ * ATS rule: recruiters search by the posting's exact title, so the profile
+ * must carry it verbatim, not a synonym. Accepts the whole title or any one
+ * of its clauses ("Sales Assistant" from "Sales Assistant - Chadstone (Casual)"),
+ * since the tail is usually location or contract noise.
+ */
+export function titleCandidates(title: string): string[] {
+  const clean = title.replace(/\([^)]*\)|\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+  const clauses = clean.split(/\s[-–—|]\s|[,/:;|]/).map((c) => c.trim()).filter((c) => /[a-z]{3}/i.test(c));
+  return [...new Set([clean, ...clauses])];
+}
+
+export function mentionsTitle(text: string, title: string): boolean {
+  const t = text.toLowerCase();
+  return titleCandidates(title).some((c) => t.includes(c.toLowerCase()));
+}
 
 export function wordCount(text: string): number {
   const t = text.trim();
@@ -49,7 +80,8 @@ function commonIssues(text: string, company: string, issues: string[]): void {
   if (!mentionsCompany(text, company)) issues.push(`never mentions the company ("${company}")`);
 }
 
-export function lintCareerProfile(text: string, company: string): string[] {
+export function lintCareerProfile(text: string, company: string, title?: string, limits: LintLimits = DEFAULT_LIMITS): string[] {
+  const PROFILE_WORDS = limits.profileWords;
   const issues: string[] = [];
   if (!text.trim()) return ['is empty'];
   if (/\n/.test(text.trim())) issues.push('is not a single paragraph (contains a line break)');
@@ -58,11 +90,13 @@ export function lintCareerProfile(text: string, company: string): string[] {
   if (words < PROFILE_WORDS.min || words > PROFILE_WORDS.max) {
     issues.push(`is ${words} words, expected ${PROFILE_WORDS.min}-${PROFILE_WORDS.max} for a one-paragraph profile`);
   }
+  if (title && !mentionsTitle(text, title)) issues.push(`never states the exact job title ("${titleCandidates(title)[0]}")`);
   commonIssues(text, company, issues);
   return issues;
 }
 
-export function lintCoverLetter(text: string, company: string): string[] {
+export function lintCoverLetter(text: string, company: string, limits: LintLimits = DEFAULT_LIMITS): string[] {
+  const { letterWords: LETTER_WORDS, letterParagraphs: LETTER_PARAGRAPHS } = limits;
   const issues: string[] = [];
   if (!text.trim()) return ['is empty'];
   const body = text.trim();
@@ -73,7 +107,7 @@ export function lintCoverLetter(text: string, company: string): string[] {
   if (LIST_LINE.test(body)) issues.push('contains bullets or a numbered list');
   const words = wordCount(body);
   if (words < LETTER_WORDS.min || words > LETTER_WORDS.max) {
-    issues.push(`is ${words} words, expected about 250-350`);
+    issues.push(`is ${words} words, expected ${LETTER_WORDS.min}-${LETTER_WORDS.max}`);
   }
   // generate_documents.py adds the salutation and sign-off itself.
   if (/^dear\b/i.test(body)) issues.push('starts with a salutation (the document builder adds "Dear <company> Hiring Team")');

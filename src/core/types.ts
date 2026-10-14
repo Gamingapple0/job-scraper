@@ -116,6 +116,17 @@ export interface PipelineStatusEvent {
 }
 
 /** The canonical record. One shape for every source. */
+export interface JobApplication {
+  tier: 'A' | 'B';
+  family: 'A' | 'B' | 'C' | 'D';
+  archetype: string;
+  thesis: string;
+  letterSent: boolean;
+  /** YYYY-MM-DD */
+  appliedAt: string;
+  folder: string;
+}
+
 export interface Job {
   /** sha1(source + ':' + sourceId) */
   id: string;
@@ -138,6 +149,14 @@ export interface Job {
   /** Runs in a row that did not see it. 3+ means probably closed. */
   missedRuns: number;
   closed: boolean;
+  /**
+   * ISO 8601. Set by check-open when the live Seek/LinkedIn page says the job
+   * no longer takes applications. Unlike `closed` (not seen in recent
+   * scrapes), a re-scrape never clears it, and every stage skips the job.
+   */
+  expiredAt?: string;
+  /** ISO 8601, last time check-open read the live page, so a call can resume and skip fresh results. */
+  liveCheckedAt?: string;
 
   salary?: Salary;
   employmentType: EmploymentType;
@@ -225,6 +244,15 @@ export interface Job {
    * no profile/cover-letter note is pending.
    */
   applyNote?: string;
+  /**
+   * Framework v2: written by app-sent when Anshu sends a hand-built
+   * application. Push-only into the tracker's measurement columns.
+   */
+  application?: JobApplication;
+  /** Framework v2 fit tier from the fit filter (or a re-score). 'skip' = re-scored out of the queue. */
+  fitTier?: 'A' | 'B' | 'skip';
+  /** Framework v2 role family: A backend Java, B full-stack TS/React, C quality/SDET, D grad program. */
+  roleFamily?: 'A' | 'B' | 'C' | 'D';
   /**
    * Anshu's own manual application-outcome tracking column in the Sheet
    * (Take home / Initial Screen / Final Round / Offer / NA / Invalid, or

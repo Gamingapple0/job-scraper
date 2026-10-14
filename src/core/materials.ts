@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Store } from './store.js';
-import { pickResumeVersion, RESUME_VERSIONS } from './resume-version.js';
-import { lintCareerProfile, lintCoverLetter } from './tailoring-lint.js';
+import { RESUME_VERSIONS } from './resume-version.js';
+import { activeProfile, pickResumeVersion } from './profile.js';
 
 /**
  * Write-back for the combined career-profile + cover-letter step. One
@@ -81,10 +81,10 @@ export function applyMaterials(
       continue;
     }
 
-    let profileReady = Boolean(job.careerProfile) && (job.careerProfileVersion ?? 'software-engineer') === expected;
+    let profileReady = Boolean(job.careerProfile) && (job.careerProfileVersion ?? activeProfile().legacyVersion) === expected;
 
     if (v.career_profile !== undefined) {
-      const issues = lintCareerProfile(v.career_profile, job.company);
+      const issues = activeProfile().lintProfile(v.career_profile, job);
       if (issues.length > 0) {
         skip(v.id, 'career_profile', issues.map((i) => `career profile ${i}`));
         if (v.cover_letter !== undefined) skip(v.id, 'cover_letter', ['not applied: it depends on the career profile above']);
@@ -99,7 +99,7 @@ export function applyMaterials(
       if (!profileReady) {
         skip(v.id, 'cover_letter', ['no current career profile for this job, so the letter is not applied']);
       } else {
-        const issues = lintCoverLetter(v.cover_letter, job.company);
+        const issues = activeProfile().lintLetter(v.cover_letter, job);
         if (issues.length > 0) skip(v.id, 'cover_letter', issues.map((i) => `cover letter ${i}`));
         else {
           if (!opts.dryRun) store.setCoverLetter(v.id, { coverLetter: v.cover_letter.trim(), version: expected });
